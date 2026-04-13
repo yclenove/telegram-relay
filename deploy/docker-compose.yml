@@ -43,7 +43,7 @@ services:
       - BOOTSTRAP_PASSWORD=replace-with-admin-password
       - WORKER_POLL_INTERVAL_MS=1000
       - WORKER_BATCH_SIZE=20
-      - ADMIN_STATIC_DIR=/app/web/admin-app/dist
+      # 管理台为独立仓库构建，需要时在宿主机挂载 dist 后设置 ADMIN_STATIC_DIR
     depends_on:
       - postgres
 

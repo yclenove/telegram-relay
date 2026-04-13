@@ -30,4 +30,4 @@ worker:
   batch_size: 20
 
 web:
-  admin_static_dir: "web/admin-app/dist"
+  admin_static_dir: ""

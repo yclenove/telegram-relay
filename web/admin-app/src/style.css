@@ -1,9 +1,0 @@
-/* 全局基础样式：管理台以 Element Plus 为主，此处仅保留页面级留白与字体。 */
-body {
-  margin: 0;
-  font-family: 'Segoe UI', 'PingFang SC', system-ui, sans-serif;
-}
-
-#app {
-  min-height: 100vh;
-}

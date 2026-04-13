@@ -151,8 +151,9 @@ func defaultConfig() Config {
 			PollIntervalMS: 1000,
 			BatchSize:      20,
 		},
+		// 管理台为独立仓库构建产物时，通过环境变量或配置指向 dist 目录；留空表示不挂载静态站点（仅 API）。
 		Web: WebConfig{
-			AdminStaticDir: "web/admin-app/dist",
+			AdminStaticDir: "",
 		},
 	}
 }

@@ -8,7 +8,7 @@
 - 多机器人管理：机器人、目标 destination、路由规则
 - 异步发送：事件入库后由 worker 轮询 `dispatch_jobs` 分发
 - 权限系统：登录鉴权 + RBAC 权限检查 + 审计日志
-- 可视化后台：`web/admin` 静态前端，调用 `/api/v2/*` 管理 API
+- 可视化后台：独立仓库 **telegram-relay-admin**（构建 `dist` 后由 `ADMIN_STATIC_DIR` 挂载），调用 `/api/v2/*` 管理 API
 
 ## 主要接口
 
@@ -51,22 +51,17 @@ go mod tidy
 go run ./cmd/relay
 ```
 
-## 前端独立项目（admin-app）
+## 管理台前端（独立 Git 仓库）
 
-管理台前端已独立为工程：`web/admin-app`。
+前端工程已拆为 **telegram-relay-admin**，与本文档仓库同级目录即可，详见 [docs/frontend-repo.md](docs/frontend-repo.md)。
 
 ```bash
-cd web/admin-app
+cd ../telegram-relay-admin
 npm install
 npm run dev
 ```
 
-构建产物输出到 `web/admin-app/dist`，后端通过 `ADMIN_STATIC_DIR` 提供静态访问。
-
-```bash
-cd web/admin-app
-npm run build
-```
+构建产物 `dist/` 通过环境变量 `ADMIN_STATIC_DIR` 指向该目录，由后端托管静态文件（若未配置则仅 API）。
 
 ## Docker 启动
 

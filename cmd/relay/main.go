@@ -66,7 +66,15 @@ func main() {
 	handler.Register(mux)
 	v2Handler := apiv2.NewHandler(logger, store, authSvc, notifySvc)
 	v2Handler.Register(mux)
-	mux.Handle("/", http.FileServer(http.Dir(cfg.Web.AdminStaticDir)))
+	// 仅当配置了静态目录且路径存在时挂载管理台，避免前端独立仓库后镜像内无文件导致异常。
+	if cfg.Web.AdminStaticDir != "" {
+		if _, err := os.Stat(cfg.Web.AdminStaticDir); err == nil {
+			mux.Handle("/", http.FileServer(http.Dir(cfg.Web.AdminStaticDir)))
+			logger.Info("admin static mounted", "dir", cfg.Web.AdminStaticDir)
+		} else {
+			logger.Warn("admin static dir missing, skip file server", "dir", cfg.Web.AdminStaticDir, "error", err)
+		}
+	}
 
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	defer workerCancel()

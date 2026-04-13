@@ -39,4 +39,5 @@ worker:
   batch_size: 20
 
 web:
-  admin_static_dir: "web/admin-app/dist"
+  # 管理台见独立仓库 telegram-relay-admin，npm run build 后将 dist 路径填于此；留空则不提供静态页
+  admin_static_dir: ""
