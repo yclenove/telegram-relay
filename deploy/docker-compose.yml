@@ -1,4 +1,17 @@
 services:
+  postgres:
+    image: postgres:16
+    container_name: telegram-relay-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=telegram_relay
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
   telegram-relay:
     build:
       context: ..
@@ -10,6 +23,7 @@ services:
       - "8080:8080"
     environment:
       - LISTEN_ADDR=:8080
+      - DATABASE_DSN=postgres://postgres:postgres@postgres:5432/telegram_relay?sslmode=disable
       - SECURITY_LEVEL=medium
       - AUTH_TOKEN=replace-with-strong-token
       - HMAC_SECRET=replace-with-hmac-secret
@@ -24,3 +38,14 @@ services:
       - RETRY_MAX_ATTEMPTS=3
       - RETRY_INITIAL_BACKOFF_MS=300
       - RETRY_MAX_BACKOFF_MS=3000
+      - JWT_SECRET=replace-with-jwt-secret
+      - BOOTSTRAP_USERNAME=admin
+      - BOOTSTRAP_PASSWORD=replace-with-admin-password
+      - WORKER_POLL_INTERVAL_MS=1000
+      - WORKER_BATCH_SIZE=20
+      - ADMIN_STATIC_DIR=/app/web/admin
+    depends_on:
+      - postgres
+
+volumes:
+  postgres_data:

@@ -16,3 +16,18 @@ retry:
   max_attempts: 3
   initial_backoff_ms: 300
   max_backoff_ms: 3000
+
+database:
+  dsn: "postgres://postgres:postgres@127.0.0.1:5432/telegram_relay?sslmode=disable"
+
+auth:
+  access_token_ttl_min: 60
+  refresh_token_ttl_min: 1440
+  bootstrap_username: "admin"
+
+worker:
+  poll_interval_ms: 1000
+  batch_size: 20
+
+web:
+  admin_static_dir: "web/admin"

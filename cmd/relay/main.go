@@ -5,16 +5,20 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"golang.org/x/time/rate"
 
+	apiv2 "telegram-notification/internal/api/v2"
 	"telegram-notification/internal/config"
 	relayhttp "telegram-notification/internal/http"
 	"telegram-notification/internal/relay"
+	"telegram-notification/internal/repository/postgres"
 	"telegram-notification/internal/security"
+	"telegram-notification/internal/service"
 	"telegram-notification/internal/telegram"
 )
 
@@ -36,13 +40,37 @@ func main() {
 
 	telegramClient := telegram.NewClient(cfg.Telegram)
 	relayService := relay.NewService(telegramClient, cfg.Retry)
+	store, err := postgres.NewStore(context.Background(), cfg.Database.DSN)
+	if err != nil {
+		logger.Error("init postgres failed", "error", err)
+		os.Exit(1)
+	}
+	defer store.Close()
+	if err := store.ApplyMigrations(context.Background(), filepath.Join(".", "migrations")); err != nil {
+		logger.Error("apply migrations failed", "error", err)
+		os.Exit(1)
+	}
+	if err := store.EnsureBootstrapData(context.Background(), cfg.Auth.BootstrapUsername, service.HashPassword(cfg.Auth.BootstrapPassword)); err != nil {
+		logger.Error("bootstrap admin failed", "error", err)
+		os.Exit(1)
+	}
+	notifySvc := service.NewNotifyService(store, cfg.Retry.MaxAttempts)
+	authSvc := service.NewAuthService(store, cfg.Auth)
+	worker := service.NewDispatchWorker(logger, store, cfg.Retry, cfg.Worker, cfg.Telegram.ParseMode)
 	verifier := security.NewVerifier(cfg.Security)
 	// 全局限流器：用于保护中转服务，防止上游突发请求把实例打挂。
 	limiter := rate.NewLimiter(rate.Limit(cfg.Security.RateLimitPerSecond), cfg.Security.RateLimitBurst)
 
 	mux := http.NewServeMux()
-	handler := relayhttp.NewHandler(logger, verifier, relayService, limiter)
+	handler := relayhttp.NewHandler(logger, verifier, relayService, notifySvc, limiter)
 	handler.Register(mux)
+	v2Handler := apiv2.NewHandler(logger, store, authSvc, notifySvc)
+	v2Handler.Register(mux)
+	mux.Handle("/", http.FileServer(http.Dir(cfg.Web.AdminStaticDir)))
+
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	defer workerCancel()
+	go worker.Start(workerCtx)
 
 	server := &http.Server{
 		Addr:         cfg.Server.ListenAddr,

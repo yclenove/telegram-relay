@@ -8,3 +8,7 @@ security:
 telegram:
   bot_token: "123456:replace-with-bot-token"
   chat_id: "-1001234567890"
+
+auth:
+  jwt_secret: "replace-with-jwt-secret"
+  bootstrap_password: "replace-with-admin-password"

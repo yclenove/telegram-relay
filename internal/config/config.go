@@ -17,6 +17,10 @@ type Config struct {
 	Security SecurityConfig `yaml:"security"`
 	Telegram TelegramConfig `yaml:"telegram"`
 	Retry    RetryConfig    `yaml:"retry"`
+	Database DatabaseConfig `yaml:"database"`
+	Auth     AuthConfig     `yaml:"auth"`
+	Worker   WorkerConfig   `yaml:"worker"`
+	Web      WebConfig      `yaml:"web"`
 }
 
 // ServerConfig 描述 HTTP 服务监听参数。
@@ -53,6 +57,31 @@ type RetryConfig struct {
 	MaxAttempts       int `yaml:"max_attempts"`
 	InitialBackoffMS  int `yaml:"initial_backoff_ms"`
 	MaxBackoffMS      int `yaml:"max_backoff_ms"`
+}
+
+// DatabaseConfig 描述 PostgreSQL 连接参数。
+type DatabaseConfig struct {
+	DSN string `yaml:"dsn"`
+}
+
+// AuthConfig 描述管理端认证与 Token 配置。
+type AuthConfig struct {
+	JWTSecret          string `yaml:"jwt_secret"`
+	AccessTokenTTLMin  int    `yaml:"access_token_ttl_min"`
+	RefreshTokenTTLMin int    `yaml:"refresh_token_ttl_min"`
+	BootstrapUsername  string `yaml:"bootstrap_username"`
+	BootstrapPassword  string `yaml:"bootstrap_password"`
+}
+
+// WorkerConfig 描述异步分发 worker 的轮询与批次参数。
+type WorkerConfig struct {
+	PollIntervalMS int `yaml:"poll_interval_ms"`
+	BatchSize      int `yaml:"batch_size"`
+}
+
+// WebConfig 描述前端静态资源路径与控制参数。
+type WebConfig struct {
+	AdminStaticDir string `yaml:"admin_static_dir"`
 }
 
 // Load 加载配置：
@@ -110,6 +139,21 @@ func defaultConfig() Config {
 			InitialBackoffMS: 300,
 			MaxBackoffMS:     3000,
 		},
+		Database: DatabaseConfig{
+			DSN: "",
+		},
+		Auth: AuthConfig{
+			AccessTokenTTLMin:  60,
+			RefreshTokenTTLMin: 24 * 60,
+			BootstrapUsername:  "admin",
+		},
+		Worker: WorkerConfig{
+			PollIntervalMS: 1000,
+			BatchSize:      20,
+		},
+		Web: WebConfig{
+			AdminStaticDir: "web/admin",
+		},
 	}
 }
 
@@ -163,6 +207,16 @@ func overrideFromEnv(cfg *Config) {
 	setInt("RETRY_MAX_ATTEMPTS", &cfg.Retry.MaxAttempts)
 	setInt("RETRY_INITIAL_BACKOFF_MS", &cfg.Retry.InitialBackoffMS)
 	setInt("RETRY_MAX_BACKOFF_MS", &cfg.Retry.MaxBackoffMS)
+
+	setString("DATABASE_DSN", &cfg.Database.DSN)
+	setString("JWT_SECRET", &cfg.Auth.JWTSecret)
+	setInt("ACCESS_TOKEN_TTL_MIN", &cfg.Auth.AccessTokenTTLMin)
+	setInt("REFRESH_TOKEN_TTL_MIN", &cfg.Auth.RefreshTokenTTLMin)
+	setString("BOOTSTRAP_USERNAME", &cfg.Auth.BootstrapUsername)
+	setString("BOOTSTRAP_PASSWORD", &cfg.Auth.BootstrapPassword)
+	setInt("WORKER_POLL_INTERVAL_MS", &cfg.Worker.PollIntervalMS)
+	setInt("WORKER_BATCH_SIZE", &cfg.Worker.BatchSize)
+	setString("ADMIN_STATIC_DIR", &cfg.Web.AdminStaticDir)
 }
 
 // splitCSV 将逗号分隔字符串转换为切片，用于白名单等配置项。
@@ -211,6 +265,21 @@ func validate(cfg Config) error {
 	}
 	if cfg.Security.RateLimitPerSecond <= 0 || cfg.Security.RateLimitBurst <= 0 {
 		return errors.New("rate limit must be > 0")
+	}
+	if cfg.Database.DSN == "" {
+		return errors.New("missing database dsn")
+	}
+	if cfg.Auth.JWTSecret == "" {
+		return errors.New("missing jwt secret")
+	}
+	if cfg.Auth.BootstrapUsername == "" || cfg.Auth.BootstrapPassword == "" {
+		return errors.New("missing bootstrap admin credentials")
+	}
+	if cfg.Auth.AccessTokenTTLMin <= 0 || cfg.Auth.RefreshTokenTTLMin <= 0 {
+		return errors.New("auth token ttl must be > 0")
+	}
+	if cfg.Worker.PollIntervalMS <= 0 || cfg.Worker.BatchSize <= 0 {
+		return errors.New("worker configuration must be > 0")
 	}
 	if _, err := time.ParseDuration(fmt.Sprintf("%ds", cfg.Telegram.TimeoutSec)); err != nil {
 		return fmt.Errorf("invalid telegram timeout: %w", err)

@@ -17,12 +17,14 @@ import (
 	"telegram-notification/internal/model"
 	"telegram-notification/internal/relay"
 	"telegram-notification/internal/security"
+	"telegram-notification/internal/service"
 )
 
 type Handler struct {
 	logger   *slog.Logger
 	verifier *security.Verifier
 	relaySvc *relay.Service
+	notifySvc *service.NotifyService
 	limiter  *rate.Limiter
 	metrics  metrics
 }
@@ -33,11 +35,12 @@ type metrics struct {
 	failed  uint64
 }
 
-func NewHandler(logger *slog.Logger, verifier *security.Verifier, relaySvc *relay.Service, limiter *rate.Limiter) *Handler {
+func NewHandler(logger *slog.Logger, verifier *security.Verifier, relaySvc *relay.Service, notifySvc *service.NotifyService, limiter *rate.Limiter) *Handler {
 	return &Handler{
 		logger:   logger,
 		verifier: verifier,
 		relaySvc: relaySvc,
+		notifySvc: notifySvc,
 		limiter:  limiter,
 	}
 }
@@ -109,18 +112,25 @@ func (h *Handler) notify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sendCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	if err := h.relaySvc.Send(sendCtx, req); err != nil {
-		h.respondError(w, requestID, http.StatusBadGateway, "telegram relay failed", err)
-		return
+	if h.notifySvc != nil {
+		if _, err := h.notifySvc.Ingest(ctx, req, body); err != nil {
+			h.respondError(w, requestID, http.StatusBadGateway, "event ingest failed", err)
+			return
+		}
+	} else {
+		sendCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		if err := h.relaySvc.Send(sendCtx, req); err != nil {
+			h.respondError(w, requestID, http.StatusBadGateway, "telegram relay failed", err)
+			return
+		}
 	}
 
 	atomic.AddUint64(&h.metrics.success, 1)
 	h.logger.Info("relay message success", "request_id", requestID, "event_id", req.EventID, "source", req.Source)
 
 	w.Header().Set("Content-Type", "application/json")
-	resp := model.NotifyResponse{RequestID: requestID, Status: "ok"}
+	resp := model.NotifyResponse{RequestID: requestID, Status: "queued"}
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
