@@ -152,7 +152,7 @@ func defaultConfig() Config {
 			BatchSize:      20,
 		},
 		Web: WebConfig{
-			AdminStaticDir: "web/admin",
+			AdminStaticDir: "web/admin-app/dist",
 		},
 	}
 }

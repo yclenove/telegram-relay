@@ -51,6 +51,23 @@ go mod tidy
 go run ./cmd/relay
 ```
 
+## 前端独立项目（admin-app）
+
+管理台前端已独立为工程：`web/admin-app`。
+
+```bash
+cd web/admin-app
+npm install
+npm run dev
+```
+
+构建产物输出到 `web/admin-app/dist`，后端通过 `ADMIN_STATIC_DIR` 提供静态访问。
+
+```bash
+cd web/admin-app
+npm run build
+```
+
 ## Docker 启动
 
 ```bash

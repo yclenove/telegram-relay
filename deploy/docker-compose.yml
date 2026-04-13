@@ -43,7 +43,7 @@ services:
       - BOOTSTRAP_PASSWORD=replace-with-admin-password
       - WORKER_POLL_INTERVAL_MS=1000
       - WORKER_BATCH_SIZE=20
-      - ADMIN_STATIC_DIR=/app/web/admin
+      - ADMIN_STATIC_DIR=/app/web/admin-app/dist
     depends_on:
       - postgres
 
