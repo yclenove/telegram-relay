@@ -53,6 +53,14 @@ go mod tidy
 go run ./cmd/relay
 ```
 
+快速探活（读取根目录 `.env` 中的 `PG_*` 拼 DSN，临时监听 `:18080`，请求 `/healthz` 后退出）：
+
+```bash
+bash scripts/exec-smoke.sh
+```
+
+Windows 可执行：`pwsh -File scripts/run-local-smoke.ps1`（依赖已安装的 Git Bash）。
+
 ## 管理台前端（独立 Git 仓库）
 
 前端工程已拆为 **telegram-relay-admin**，与本文档仓库同级目录即可，详见 [docs/frontend-repo.md](docs/frontend-repo.md)。
