@@ -26,6 +26,29 @@ func (s *Store) ListRoles(ctx context.Context) ([]domain.Role, error) {
 	return out, nil
 }
 
+// ListPermissionCodesForRole 返回某角色绑定的权限码列表；角色不存在时返回 pgx.ErrNoRows。
+func (s *Store) ListPermissionCodesForRole(ctx context.Context, roleID int64) ([]string, error) {
+	var one int
+	if err := s.pool.QueryRow(ctx, `SELECT 1 FROM roles WHERE id=$1`, roleID).Scan(&one); err != nil {
+		return nil, err
+	}
+	rows, err := s.pool.Query(ctx, `
+SELECT permission_code FROM role_permissions WHERE role_id=$1 ORDER BY permission_code ASC`, roleID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var code string
+		if err := rows.Scan(&code); err != nil {
+			return nil, err
+		}
+		out = append(out, code)
+	}
+	return out, nil
+}
+
 // ListUserSummaries 返回用户及角色 id 列表（不含密码）。
 func (s *Store) ListUserSummaries(ctx context.Context) ([]domain.UserSummary, error) {
 	rows, err := s.pool.Query(ctx, `

@@ -49,11 +49,14 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("PATCH /api/v2/rules/{id}", h.withAuth("rule.manage", http.HandlerFunc(h.patchRule)))
 	mux.Handle("DELETE /api/v2/rules/{id}", h.withAuth("rule.manage", http.HandlerFunc(h.deleteRule)))
 	mux.Handle("/api/v2/events", h.withAuth("event.read", http.HandlerFunc(h.events)))
+	mux.Handle("GET /api/v2/events/{id}", h.withAuth("event.read", http.HandlerFunc(h.getEvent)))
+	mux.Handle("GET /api/v2/dispatch-jobs", h.withAuth("event.read", http.HandlerFunc(h.listDispatchJobs)))
 	mux.Handle("/api/v2/audits", h.withAuth("audit.read", http.HandlerFunc(h.audits)))
 	mux.Handle("/api/v2/dashboard", h.withAuth("event.read", http.HandlerFunc(h.dashboard)))
 	mux.Handle("/api/v2/notify", http.HandlerFunc(h.notifyV2))
 	// 用户与角色管理（Go 1.22+ 方法路由，与旧式路径匹配并存）
 	mux.Handle("GET /api/v2/roles", h.withAuth("user.manage", http.HandlerFunc(h.listRoles)))
+	mux.Handle("GET /api/v2/roles/{id}/permissions", h.withAuth("user.manage", http.HandlerFunc(h.listRolePermissions)))
 	mux.Handle("GET /api/v2/users", h.withAuth("user.manage", http.HandlerFunc(h.listUsers)))
 	mux.Handle("POST /api/v2/users", h.withAuth("user.manage", http.HandlerFunc(h.createUser)))
 	mux.Handle("PATCH /api/v2/users/{id}", h.withAuth("user.manage", http.HandlerFunc(h.patchUser)))
@@ -164,13 +167,19 @@ func (h *Handler) rules(w http.ResponseWriter, r *http.Request) {
 			Priority      int    `json:"priority"`
 			MatchSource   string `json:"match_source"`
 			MatchLevel    string `json:"match_level"`
+			MatchLabels   string `json:"match_labels"`
 			DestinationID int64  `json:"destination_id"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid payload", http.StatusBadRequest)
 			return
 		}
-		item, err := h.store.CreateRule(r.Context(), req.Name, req.Priority, req.MatchSource, req.MatchLevel, req.DestinationID)
+		ml, err := NormalizeJSONObjectJSON(req.MatchLabels)
+		if err != nil {
+			http.Error(w, "invalid match_labels: must be a JSON object", http.StatusBadRequest)
+			return
+		}
+		item, err := h.store.CreateRule(r.Context(), req.Name, req.Priority, req.MatchSource, req.MatchLevel, ml, req.DestinationID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -217,7 +226,26 @@ func (h *Handler) audits(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	limit, offset := parseListLimitOffset(r)
-	items, total, err := h.store.ListAuditLogs(r.Context(), q.Get("action"), q.Get("object_type"), limit, offset)
+	var actorPtr *int64
+	if s := strings.TrimSpace(q.Get("actor_user_id")); s != "" {
+		aid, err := strconv.ParseInt(s, 10, 64)
+		if err != nil || aid <= 0 {
+			http.Error(w, "invalid actor_user_id", http.StatusBadRequest)
+			return
+		}
+		actorPtr = &aid
+	}
+	createdAfter, err := parseOptionalRFC3339(q.Get("created_after"))
+	if err != nil {
+		http.Error(w, "invalid created_after (use RFC3339)", http.StatusBadRequest)
+		return
+	}
+	createdBefore, err := parseOptionalRFC3339(q.Get("created_before"))
+	if err != nil {
+		http.Error(w, "invalid created_before (use RFC3339)", http.StatusBadRequest)
+		return
+	}
+	items, total, err := h.store.ListAuditLogs(r.Context(), q.Get("action"), q.Get("object_type"), q.Get("object_id"), actorPtr, createdAfter, createdBefore, limit, offset)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

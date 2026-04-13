@@ -467,13 +467,14 @@ func (s *Store) DeleteDestination(ctx context.Context, id int64) error {
 	return nil
 }
 
-func (s *Store) CreateRule(ctx context.Context, name string, priority int, source, level string, destinationID int64) (domain.RoutingRule, error) {
+// CreateRule 创建路由规则；matchLabelsJSON 须为 JSON 对象文本（如 {}），由调用方校验。
+func (s *Store) CreateRule(ctx context.Context, name string, priority int, source, level, matchLabelsJSON string, destinationID int64) (domain.RoutingRule, error) {
 	var r domain.RoutingRule
 	err := s.pool.QueryRow(ctx, `
 INSERT INTO routing_rules(name,priority,match_source,match_level,match_labels,destination_id,is_enabled)
-VALUES($1,$2,$3,$4,'{}',$5,TRUE)
+VALUES($1,$2,$3,$4,$5::jsonb,$6,TRUE)
 RETURNING id,name,priority,match_source,match_level,match_labels::text,destination_id,is_enabled,created_at,updated_at
-`, name, priority, source, level, destinationID).
+`, name, priority, source, level, matchLabelsJSON, destinationID).
 		Scan(&r.ID, &r.Name, &r.Priority, &r.MatchSource, &r.MatchLevel, &r.MatchLabels, &r.DestinationID, &r.IsEnabled, &r.CreatedAt, &r.UpdatedAt)
 	return r, err
 }
@@ -505,6 +506,7 @@ func (s *Store) UpdateRulePatch(
 	name *string,
 	priority *int,
 	matchSource, matchLevel *string,
+	matchLabels *string,
 	destinationID *int64,
 	isEnabled *bool,
 ) (domain.RoutingRule, error) {
@@ -538,6 +540,9 @@ FOR UPDATE
 	if matchLevel != nil {
 		r.MatchLevel = *matchLevel
 	}
+	if matchLabels != nil {
+		r.MatchLabels = strings.TrimSpace(*matchLabels)
+	}
 	if destinationID != nil {
 		var one int
 		if err := tx.QueryRow(ctx, `SELECT 1 FROM destinations WHERE id=$1`, *destinationID).Scan(&one); err != nil {
@@ -552,10 +557,10 @@ FOR UPDATE
 		r.IsEnabled = *isEnabled
 	}
 	err = tx.QueryRow(ctx, `
-UPDATE routing_rules SET name=$1,priority=$2,match_source=$3,match_level=$4,destination_id=$5,is_enabled=$6,updated_at=NOW()
-WHERE id=$7
+UPDATE routing_rules SET name=$1,priority=$2,match_source=$3,match_level=$4,match_labels=$5::jsonb,destination_id=$6,is_enabled=$7,updated_at=NOW()
+WHERE id=$8
 RETURNING id,name,priority,match_source,match_level,match_labels::text,destination_id,is_enabled,created_at,updated_at
-`, r.Name, r.Priority, r.MatchSource, r.MatchLevel, r.DestinationID, r.IsEnabled, id).
+`, r.Name, r.Priority, r.MatchSource, r.MatchLevel, r.MatchLabels, r.DestinationID, r.IsEnabled, id).
 		Scan(&r.ID, &r.Name, &r.Priority, &r.MatchSource, &r.MatchLevel, &r.MatchLabels, &r.DestinationID, &r.IsEnabled, &r.CreatedAt, &r.UpdatedAt)
 	if err != nil {
 		return domain.RoutingRule{}, err
@@ -722,20 +727,65 @@ FROM events WHERE %s ORDER BY id DESC LIMIT $%d OFFSET $%d`, where, lim, off)
 	return out, total, nil
 }
 
+// GetEventByID 按主键读取完整事件（含 message/raw_body，供管理端详情）。
+func (s *Store) GetEventByID(ctx context.Context, id int64) (domain.Event, error) {
+	var e domain.Event
+	err := s.pool.QueryRow(ctx, `
+SELECT id,event_id,source,level,title,message,labels::text,raw_body::text,status,created_at,updated_at
+FROM events WHERE id=$1
+`, id).Scan(&e.ID, &e.EventID, &e.Source, &e.Level, &e.Title, &e.Message, &e.Labels, &e.RawBody, &e.Status, &e.CreatedAt, &e.UpdatedAt)
+	return e, err
+}
+
+// ListDispatchJobs 分页列出异步发送任务，可按 status 精确筛选。
+func (s *Store) ListDispatchJobs(ctx context.Context, status string, limit, offset int) ([]domain.DispatchJob, int64, error) {
+	where, args := buildDispatchWhere(status)
+	var total int64
+	if err := s.pool.QueryRow(ctx, "SELECT COUNT(1) FROM dispatch_jobs WHERE "+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	lim := len(args) + 1
+	off := len(args) + 2
+	q := fmt.Sprintf(`
+SELECT id,event_id,destination_id,status,attempt_count,max_attempts,last_error,next_attempt_at,locked_at,created_at,updated_at
+FROM dispatch_jobs WHERE %s ORDER BY id DESC LIMIT $%d OFFSET $%d`, where, lim, off)
+	listArgs := append(append([]any{}, args...), limit, offset)
+	rows, err := s.pool.Query(ctx, q, listArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var out []domain.DispatchJob
+	for rows.Next() {
+		var j domain.DispatchJob
+		if err := rows.Scan(&j.ID, &j.EventID, &j.DestinationID, &j.Status, &j.AttemptCount, &j.MaxAttempts, &j.LastError, &j.NextAttemptAt, &j.LockedAt, &j.CreatedAt, &j.UpdatedAt); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, j)
+	}
+	return out, total, nil
+}
+
 func (s *Store) DashboardStats(ctx context.Context) (map[string]int64, error) {
 	stats := map[string]int64{
-		"events_total":    0,
-		"events_sent":     0,
-		"events_failed":   0,
-		"jobs_pending":    0,
-		"bots_enabled":    0,
-		"rules_enabled":   0,
+		"events_total":       0,
+		"events_sent":        0,
+		"events_failed":      0,
+		"events_last_24h":    0,
+		"jobs_pending":       0,
+		"jobs_failed":           0,
+		"jobs_failed_last_24h": 0,
+		"bots_enabled":       0,
+		"rules_enabled":      0,
 	}
 	queryPairs := map[string]string{
 		"events_total":  "SELECT COUNT(1) FROM events",
 		"events_sent":   "SELECT COUNT(1) FROM events WHERE status='sent'",
 		"events_failed": "SELECT COUNT(1) FROM events WHERE status='failed'",
+		"events_last_24h": `SELECT COUNT(1) FROM events WHERE created_at >= NOW() - INTERVAL '24 hours'`,
 		"jobs_pending":  "SELECT COUNT(1) FROM dispatch_jobs WHERE status='pending'",
+		"jobs_failed":   "SELECT COUNT(1) FROM dispatch_jobs WHERE status='failed'",
+		"jobs_failed_last_24h": `SELECT COUNT(1) FROM dispatch_jobs WHERE status='failed' AND updated_at >= NOW() - INTERVAL '24 hours'`,
 		"bots_enabled":  "SELECT COUNT(1) FROM bots WHERE is_enabled=TRUE",
 		"rules_enabled": "SELECT COUNT(1) FROM routing_rules WHERE is_enabled=TRUE",
 	}
@@ -750,8 +800,14 @@ func (s *Store) DashboardStats(ctx context.Context) (map[string]int64, error) {
 }
 
 // ListAuditLogs 按筛选与分页返回审计记录及总数。
-func (s *Store) ListAuditLogs(ctx context.Context, action, objectType string, limit, offset int) ([]AuditLogView, int64, error) {
-	where, args := buildAuditWhere(action, objectType)
+func (s *Store) ListAuditLogs(
+	ctx context.Context,
+	action, objectType, objectID string,
+	actorUserID *int64,
+	createdAfter, createdBefore *time.Time,
+	limit, offset int,
+) ([]AuditLogView, int64, error) {
+	where, args := buildAuditWhere(action, objectType, objectID, actorUserID, createdAfter, createdBefore)
 	var total int64
 	if err := s.pool.QueryRow(ctx, "SELECT COUNT(1) FROM audit_logs WHERE "+where, args...).Scan(&total); err != nil {
 		return nil, 0, err

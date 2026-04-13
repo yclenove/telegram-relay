@@ -25,6 +25,30 @@ func (h *Handler) listRoles(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, list)
 }
 
+// listRolePermissions 返回指定角色的权限码列表（只读），便于管理台展示 RBAC 而不改库。
+func (h *Handler) listRolePermissions(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	idStr := r.PathValue("id")
+	rid, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || rid <= 0 {
+		http.Error(w, "invalid role id", http.StatusBadRequest)
+		return
+	}
+	codes, err := h.store.ListPermissionCodesForRole(r.Context(), rid)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"role_id": rid, "permissions": codes})
+}
+
 func (h *Handler) listUsers(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

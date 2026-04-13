@@ -3,7 +3,22 @@ package v2
 import (
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 )
+
+// parseOptionalRFC3339 解析查询串中的可选时间（RFC3339）；空串返回 nil。
+func parseOptionalRFC3339(s string) (*time.Time, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
 
 // parseListLimitOffset 解析管理端列表分页参数：默认 limit=20，最大 200，offset 非负。
 func parseListLimitOffset(r *http.Request) (limit, offset int) {

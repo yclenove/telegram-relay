@@ -38,8 +38,18 @@
 ## 七、工程与文档
 
 - [x] README 管理接口说明与 **`.gitignore` 忽略 `.cursor/`**
-- [x] 阶段构建：`go test ./...`、`npm run build`
+- [x] 阶段构建：`go test ./...`、`npm run build`；管理端 `npm run test`（Vitest，`buildListQuery` 等）
 
 ---
 
 说明：私密配置仍不入库；部署新接口后需 **重启 relay** 并视情况 **重新登录** 以刷新 JWT。
+
+## 八、增强（已完成）
+
+- [x] **发送任务**：`GET /api/v2/dispatch-jobs` 分页与 `status` 筛选（`event.read`），管理端「发送任务」页
+- [x] **事件详情**：`GET /api/v2/events/{id}` 返回完整事件；事件列表「详情」抽屉
+- [x] **审计扩展筛选**：`object_id`、`actor_user_id`、`created_after`/`created_before`（RFC3339）
+- [x] **规则 match_labels**：创建/更新时 JSON 对象校验与持久化
+- [x] **仪表盘**：近 24 小时事件数、失败任务数等指标
+- [x] **角色只读增强**：`GET /api/v2/roles/{id}/permissions` 列出角色权限码；管理端「角色与权限」只读页
+- [x] **前端 Vitest**：`buildListQuery` 工具函数单测

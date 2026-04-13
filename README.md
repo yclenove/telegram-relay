@@ -23,10 +23,11 @@ Go 模块：`github.com/yclenove/telegram-relay`（与 GitHub 仓库名 **telegr
   - `GET/POST /api/v2/bots`；`PATCH/DELETE /api/v2/bots/{id}`（需 `bot.manage`）
   - `GET/POST /api/v2/destinations`；`PATCH/DELETE /api/v2/destinations/{id}`（需 `bot.manage`）
   - `GET/POST /api/v2/rules`；`PATCH/DELETE /api/v2/rules/{id}`（需 `rule.manage`）
-  - `GET /api/v2/events`：分页与筛选，响应 `{ items, total }`；查询参数 `limit`（默认 20，最大 200）、`offset`、`source`、`level`、`status`（精确匹配，可组合）
-  - `GET /api/v2/audits`：分页与筛选，响应 `{ items, total }`；查询参数 `limit`、`offset`、`action`、`object_type`（精确匹配，可组合）
+  - `GET /api/v2/events`：分页与筛选，响应 `{ items, total }`；`GET /api/v2/events/{id}` 单条详情（需 `event.read`）
+  - `GET /api/v2/dispatch-jobs`：发送任务分页列表，响应 `{ items, total }`；查询参数 `limit`、`offset`、`status`（需 `event.read`）
+  - `GET /api/v2/audits`：分页与筛选，响应 `{ items, total }`；查询参数含 `object_id`、`actor_user_id`、`created_after`/`created_before`（RFC3339）等（需 `audit.read`）
   - `GET /api/v2/dashboard`
-  - `GET /api/v2/roles`；`GET/POST /api/v2/users`、`PATCH/DELETE /api/v2/users/{id}`（需 `user.manage` 或 `system.manage`）
+  - `GET /api/v2/roles`；`GET /api/v2/roles/{id}/permissions`（只读权限码列表）；`GET/POST /api/v2/users`、`PATCH/DELETE /api/v2/users/{id}`（需 `user.manage` 或 `system.manage`）
 
 ## 配置文件（公私分离）
 

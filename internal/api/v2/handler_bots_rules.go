@@ -95,6 +95,7 @@ func (h *Handler) patchRule(w http.ResponseWriter, r *http.Request) {
 		Priority       *int    `json:"priority"`
 		MatchSource    *string `json:"match_source"`
 		MatchLevel     *string `json:"match_level"`
+		MatchLabels    *string `json:"match_labels"`
 		DestinationID  *int64  `json:"destination_id"`
 		IsEnabled      *bool   `json:"is_enabled"`
 	}
@@ -102,7 +103,16 @@ func (h *Handler) patchRule(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
-	out, err := h.store.UpdateRulePatch(r.Context(), id, req.Name, req.Priority, req.MatchSource, req.MatchLevel, req.DestinationID, req.IsEnabled)
+	var matchLabelsPatch *string
+	if req.MatchLabels != nil {
+		norm, err := NormalizeJSONObjectJSON(*req.MatchLabels)
+		if err != nil {
+			http.Error(w, "invalid match_labels: must be a JSON object", http.StatusBadRequest)
+			return
+		}
+		matchLabelsPatch = &norm
+	}
+	out, err := h.store.UpdateRulePatch(r.Context(), id, req.Name, req.Priority, req.MatchSource, req.MatchLevel, matchLabelsPatch, req.DestinationID, req.IsEnabled)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			http.Error(w, "not found", http.StatusNotFound)
