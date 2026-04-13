@@ -24,6 +24,9 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
+// ErrDestinationNotFound 表示更新规则时引用的发送目标不存在，供 API 层映射为 400。
+var ErrDestinationNotFound = errors.New("destination not found")
+
 // AuditLogView 为管理端展示用的审计日志结构。
 type AuditLogView struct {
 	ID         int64     `json:"id"`
@@ -265,6 +268,77 @@ func (s *Store) ListBots(ctx context.Context) ([]domain.Bot, error) {
 	return out, nil
 }
 
+// UpdateBotPatch 按非 nil 字段更新机器人；更换 Token 时重新加密写入。
+// 将某机器人设为默认时，会在同一事务内清除其余机器人的默认标记，与 CreateBot 行为一致。
+func (s *Store) UpdateBotPatch(
+	ctx context.Context,
+	id int64,
+	name, remark *string,
+	isEnabled, isDefault *bool,
+	botToken *string,
+) (domain.Bot, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Bot{}, err
+	}
+	defer tx.Rollback(ctx)
+	var b domain.Bot
+	err = tx.QueryRow(ctx, `
+SELECT id,name,bot_token_enc,is_enabled,is_default,remark,created_at,updated_at
+FROM bots WHERE id=$1
+FOR UPDATE
+`, id).Scan(&b.ID, &b.Name, &b.BotTokenEnc, &b.IsEnabled, &b.IsDefault, &b.Remark, &b.CreatedAt, &b.UpdatedAt)
+	if err != nil {
+		return domain.Bot{}, err
+	}
+	if name != nil {
+		n := strings.TrimSpace(*name)
+		if n == "" {
+			return domain.Bot{}, fmt.Errorf("name cannot be empty")
+		}
+		b.Name = n
+	}
+	if remark != nil {
+		b.Remark = *remark
+	}
+	if isEnabled != nil {
+		b.IsEnabled = *isEnabled
+	}
+	if isDefault != nil && *isDefault {
+		if _, err := tx.Exec(ctx, `UPDATE bots SET is_default=FALSE WHERE id<>$1`, id); err != nil {
+			return domain.Bot{}, err
+		}
+		b.IsDefault = true
+	} else if isDefault != nil {
+		b.IsDefault = *isDefault
+	}
+	if botToken != nil && strings.TrimSpace(*botToken) != "" {
+		b.BotTokenEnc = EncryptSecret(strings.TrimSpace(*botToken))
+	}
+	err = tx.QueryRow(ctx, `
+UPDATE bots SET name=$1,remark=$2,is_enabled=$3,is_default=$4,bot_token_enc=$5,updated_at=NOW()
+WHERE id=$6
+RETURNING id,name,bot_token_enc,is_enabled,is_default,remark,created_at,updated_at
+`, b.Name, b.Remark, b.IsEnabled, b.IsDefault, b.BotTokenEnc, id).
+		Scan(&b.ID, &b.Name, &b.BotTokenEnc, &b.IsEnabled, &b.IsDefault, &b.Remark, &b.CreatedAt, &b.UpdatedAt)
+	if err != nil {
+		return domain.Bot{}, err
+	}
+	return b, tx.Commit(ctx)
+}
+
+// DeleteBot 删除机器人；依赖外键级联删除其目标与关联规则。
+func (s *Store) DeleteBot(ctx context.Context, id int64) error {
+	cmd, err := s.pool.Exec(ctx, `DELETE FROM bots WHERE id=$1`, id)
+	if err != nil {
+		return err
+	}
+	if cmd.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
 func (s *Store) CreateDestination(ctx context.Context, botID int64, name, chatID, parseMode string) (domain.Destination, error) {
 	var d domain.Destination
 	err := s.pool.QueryRow(ctx, `
@@ -327,6 +401,83 @@ FROM routing_rules ORDER BY priority ASC,id ASC
 		out = append(out, r)
 	}
 	return out, nil
+}
+
+// UpdateRulePatch 按非 nil 字段更新路由规则；若传入 destination_id 则校验目标存在。
+func (s *Store) UpdateRulePatch(
+	ctx context.Context,
+	id int64,
+	name *string,
+	priority *int,
+	matchSource, matchLevel *string,
+	destinationID *int64,
+	isEnabled *bool,
+) (domain.RoutingRule, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.RoutingRule{}, err
+	}
+	defer tx.Rollback(ctx)
+	var r domain.RoutingRule
+	err = tx.QueryRow(ctx, `
+SELECT id,name,priority,match_source,match_level,match_labels::text,destination_id,is_enabled,created_at,updated_at
+FROM routing_rules WHERE id=$1
+FOR UPDATE
+`, id).Scan(&r.ID, &r.Name, &r.Priority, &r.MatchSource, &r.MatchLevel, &r.MatchLabels, &r.DestinationID, &r.IsEnabled, &r.CreatedAt, &r.UpdatedAt)
+	if err != nil {
+		return domain.RoutingRule{}, err
+	}
+	if name != nil {
+		n := strings.TrimSpace(*name)
+		if n == "" {
+			return domain.RoutingRule{}, fmt.Errorf("name cannot be empty")
+		}
+		r.Name = n
+	}
+	if priority != nil {
+		r.Priority = *priority
+	}
+	if matchSource != nil {
+		r.MatchSource = *matchSource
+	}
+	if matchLevel != nil {
+		r.MatchLevel = *matchLevel
+	}
+	if destinationID != nil {
+		var one int
+		if err := tx.QueryRow(ctx, `SELECT 1 FROM destinations WHERE id=$1`, *destinationID).Scan(&one); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return domain.RoutingRule{}, ErrDestinationNotFound
+			}
+			return domain.RoutingRule{}, err
+		}
+		r.DestinationID = *destinationID
+	}
+	if isEnabled != nil {
+		r.IsEnabled = *isEnabled
+	}
+	err = tx.QueryRow(ctx, `
+UPDATE routing_rules SET name=$1,priority=$2,match_source=$3,match_level=$4,destination_id=$5,is_enabled=$6,updated_at=NOW()
+WHERE id=$7
+RETURNING id,name,priority,match_source,match_level,match_labels::text,destination_id,is_enabled,created_at,updated_at
+`, r.Name, r.Priority, r.MatchSource, r.MatchLevel, r.DestinationID, r.IsEnabled, id).
+		Scan(&r.ID, &r.Name, &r.Priority, &r.MatchSource, &r.MatchLevel, &r.MatchLabels, &r.DestinationID, &r.IsEnabled, &r.CreatedAt, &r.UpdatedAt)
+	if err != nil {
+		return domain.RoutingRule{}, err
+	}
+	return r, tx.Commit(ctx)
+}
+
+// DeleteRule 按主键删除单条路由规则。
+func (s *Store) DeleteRule(ctx context.Context, id int64) error {
+	cmd, err := s.pool.Exec(ctx, `DELETE FROM routing_rules WHERE id=$1`, id)
+	if err != nil {
+		return err
+	}
+	if cmd.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
 }
 
 func (s *Store) NextPendingJobs(ctx context.Context, limit int) ([]domain.DispatchJob, error) {

@@ -40,8 +40,12 @@ func NewHandler(logger *slog.Logger, store *postgres.Store, authSvc *service.Aut
 func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v2/auth/login", h.login)
 	mux.Handle("/api/v2/bots", h.withAuth("bot.manage", http.HandlerFunc(h.bots)))
+	mux.Handle("PATCH /api/v2/bots/{id}", h.withAuth("bot.manage", http.HandlerFunc(h.patchBot)))
+	mux.Handle("DELETE /api/v2/bots/{id}", h.withAuth("bot.manage", http.HandlerFunc(h.deleteBot)))
 	mux.Handle("/api/v2/destinations", h.withAuth("bot.manage", http.HandlerFunc(h.destinations)))
 	mux.Handle("/api/v2/rules", h.withAuth("rule.manage", http.HandlerFunc(h.rules)))
+	mux.Handle("PATCH /api/v2/rules/{id}", h.withAuth("rule.manage", http.HandlerFunc(h.patchRule)))
+	mux.Handle("DELETE /api/v2/rules/{id}", h.withAuth("rule.manage", http.HandlerFunc(h.deleteRule)))
 	mux.Handle("/api/v2/events", h.withAuth("event.read", http.HandlerFunc(h.events)))
 	mux.Handle("/api/v2/audits", h.withAuth("audit.read", http.HandlerFunc(h.audits)))
 	mux.Handle("/api/v2/dashboard", h.withAuth("event.read", http.HandlerFunc(h.dashboard)))

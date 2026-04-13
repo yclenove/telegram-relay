@@ -19,9 +19,9 @@ Go 模块：`github.com/yclenove/telegram-relay`（与 GitHub 仓库名 **telegr
   - `POST /api/v2/notify`
 - 管理端接口
   - `POST /api/v2/auth/login`
-  - `GET/POST /api/v2/bots`
+  - `GET/POST /api/v2/bots`；`PATCH/DELETE /api/v2/bots/{id}`（需 `bot.manage`）
   - `GET/POST /api/v2/destinations`（列表 + 创建）
-  - `GET/POST /api/v2/rules`
+  - `GET/POST /api/v2/rules`；`PATCH/DELETE /api/v2/rules/{id}`（需 `rule.manage`）
   - `GET /api/v2/events`
   - `GET /api/v2/audits`
   - `GET /api/v2/dashboard`
