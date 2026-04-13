@@ -27,6 +27,9 @@ type Store struct {
 // ErrDestinationNotFound 表示更新规则时引用的发送目标不存在，供 API 层映射为 400。
 var ErrDestinationNotFound = errors.New("destination not found")
 
+// ErrBotNotFound 表示更新发送目标时引用的机器人不存在。
+var ErrBotNotFound = errors.New("bot not found")
+
 // AuditLogView 为管理端展示用的审计日志结构。
 type AuditLogView struct {
 	ID         int64     `json:"id"`
@@ -372,6 +375,98 @@ ORDER BY d.id DESC
 	return out, nil
 }
 
+// GetDestinationByID 按主键读取发送目标（不含机器人名称，供更新前加载）。
+func (s *Store) GetDestinationByID(ctx context.Context, id int64) (domain.Destination, error) {
+	var d domain.Destination
+	err := s.pool.QueryRow(ctx, `
+SELECT id,bot_id,name,chat_id,topic_id,parse_mode,is_enabled,created_at,updated_at
+FROM destinations WHERE id=$1
+`, id).Scan(&d.ID, &d.BotID, &d.Name, &d.ChatID, &d.TopicID, &d.ParseMode, &d.IsEnabled, &d.CreatedAt, &d.UpdatedAt)
+	return d, err
+}
+
+// UpdateDestinationPatch 部分更新发送目标；若指定 bot_id 则校验机器人存在。
+func (s *Store) UpdateDestinationPatch(
+	ctx context.Context,
+	id int64,
+	botID *int64,
+	name, chatID, topicID, parseMode *string,
+	isEnabled *bool,
+) (domain.Destination, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return domain.Destination{}, err
+	}
+	defer tx.Rollback(ctx)
+	var d domain.Destination
+	err = tx.QueryRow(ctx, `
+SELECT id,bot_id,name,chat_id,topic_id,parse_mode,is_enabled,created_at,updated_at
+FROM destinations WHERE id=$1
+FOR UPDATE
+`, id).Scan(&d.ID, &d.BotID, &d.Name, &d.ChatID, &d.TopicID, &d.ParseMode, &d.IsEnabled, &d.CreatedAt, &d.UpdatedAt)
+	if err != nil {
+		return domain.Destination{}, err
+	}
+	if botID != nil {
+		var one int
+		if err := tx.QueryRow(ctx, `SELECT 1 FROM bots WHERE id=$1`, *botID).Scan(&one); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return domain.Destination{}, ErrBotNotFound
+			}
+			return domain.Destination{}, err
+		}
+		d.BotID = *botID
+	}
+	if name != nil {
+		n := strings.TrimSpace(*name)
+		if n == "" {
+			return domain.Destination{}, fmt.Errorf("name cannot be empty")
+		}
+		d.Name = n
+	}
+	if chatID != nil {
+		c := strings.TrimSpace(*chatID)
+		if c == "" {
+			return domain.Destination{}, fmt.Errorf("chat_id cannot be empty")
+		}
+		d.ChatID = c
+	}
+	if topicID != nil {
+		d.TopicID = *topicID
+	}
+	if parseMode != nil {
+		d.ParseMode = strings.TrimSpace(*parseMode)
+		if d.ParseMode == "" {
+			d.ParseMode = "HTML"
+		}
+	}
+	if isEnabled != nil {
+		d.IsEnabled = *isEnabled
+	}
+	err = tx.QueryRow(ctx, `
+UPDATE destinations SET bot_id=$1,name=$2,chat_id=$3,topic_id=$4,parse_mode=$5,is_enabled=$6,updated_at=NOW()
+WHERE id=$7
+RETURNING id,bot_id,name,chat_id,topic_id,parse_mode,is_enabled,created_at,updated_at
+`, d.BotID, d.Name, d.ChatID, d.TopicID, d.ParseMode, d.IsEnabled, id).
+		Scan(&d.ID, &d.BotID, &d.Name, &d.ChatID, &d.TopicID, &d.ParseMode, &d.IsEnabled, &d.CreatedAt, &d.UpdatedAt)
+	if err != nil {
+		return domain.Destination{}, err
+	}
+	return d, tx.Commit(ctx)
+}
+
+// DeleteDestination 删除发送目标；关联路由规则由外键级联删除。
+func (s *Store) DeleteDestination(ctx context.Context, id int64) error {
+	cmd, err := s.pool.Exec(ctx, `DELETE FROM destinations WHERE id=$1`, id)
+	if err != nil {
+		return err
+	}
+	if cmd.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
 func (s *Store) CreateRule(ctx context.Context, name string, priority int, source, level string, destinationID int64) (domain.RoutingRule, error) {
 	var r domain.RoutingRule
 	err := s.pool.QueryRow(ctx, `
@@ -598,24 +693,33 @@ VALUES($1,$2,$3,$4,$5::jsonb)
 	return err
 }
 
-func (s *Store) ListEvents(ctx context.Context, limit int) ([]domain.Event, error) {
-	rows, err := s.pool.Query(ctx, `
+// ListEvents 按筛选与分页返回事件列表及符合条件的总数（用于管理端表格分页）。
+func (s *Store) ListEvents(ctx context.Context, source, level, status string, limit, offset int) ([]domain.Event, int64, error) {
+	where, args := buildEventWhere(source, level, status)
+	var total int64
+	if err := s.pool.QueryRow(ctx, "SELECT COUNT(1) FROM events WHERE "+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	lim := len(args) + 1
+	off := len(args) + 2
+	q := fmt.Sprintf(`
 SELECT id,event_id,source,level,title,message,labels::text,raw_body::text,status,created_at,updated_at
-FROM events ORDER BY id DESC LIMIT $1
-`, limit)
+FROM events WHERE %s ORDER BY id DESC LIMIT $%d OFFSET $%d`, where, lim, off)
+	listArgs := append(append([]any{}, args...), limit, offset)
+	rows, err := s.pool.Query(ctx, q, listArgs...)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	var out []domain.Event
 	for rows.Next() {
 		var e domain.Event
 		if err := rows.Scan(&e.ID, &e.EventID, &e.Source, &e.Level, &e.Title, &e.Message, &e.Labels, &e.RawBody, &e.Status, &e.CreatedAt, &e.UpdatedAt); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		out = append(out, e)
 	}
-	return out, nil
+	return out, total, nil
 }
 
 func (s *Store) DashboardStats(ctx context.Context) (map[string]int64, error) {
@@ -645,22 +749,31 @@ func (s *Store) DashboardStats(ctx context.Context) (map[string]int64, error) {
 	return stats, nil
 }
 
-func (s *Store) ListAuditLogs(ctx context.Context, limit int) ([]AuditLogView, error) {
-	rows, err := s.pool.Query(ctx, `
+// ListAuditLogs 按筛选与分页返回审计记录及总数。
+func (s *Store) ListAuditLogs(ctx context.Context, action, objectType string, limit, offset int) ([]AuditLogView, int64, error) {
+	where, args := buildAuditWhere(action, objectType)
+	var total int64
+	if err := s.pool.QueryRow(ctx, "SELECT COUNT(1) FROM audit_logs WHERE "+where, args...).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	lim := len(args) + 1
+	off := len(args) + 2
+	q := fmt.Sprintf(`
 SELECT id,actor_user_id,action,object_type,object_id,detail::text,created_at
-FROM audit_logs ORDER BY id DESC LIMIT $1
-`, limit)
+FROM audit_logs WHERE %s ORDER BY id DESC LIMIT $%d OFFSET $%d`, where, lim, off)
+	listArgs := append(append([]any{}, args...), limit, offset)
+	rows, err := s.pool.Query(ctx, q, listArgs...)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	var out []AuditLogView
 	for rows.Next() {
 		var a AuditLogView
 		if err := rows.Scan(&a.ID, &a.ActorUserID, &a.Action, &a.ObjectType, &a.ObjectID, &a.Detail, &a.CreatedAt); err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		out = append(out, a)
 	}
-	return out, nil
+	return out, total, nil
 }

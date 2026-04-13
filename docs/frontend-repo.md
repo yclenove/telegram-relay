@@ -13,3 +13,5 @@ export ADMIN_STATIC_DIR=/path/to/telegram-relay-admin/dist
 ```
 
 若未配置 `ADMIN_STATIC_DIR` 或目录不存在，网关仅提供 API，不托管管理台静态页。
+
+管理台功能阶段与接口完成情况见本仓库 [`admin-console-plan.md`](./admin-console-plan.md)。

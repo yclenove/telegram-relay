@@ -43,6 +43,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("PATCH /api/v2/bots/{id}", h.withAuth("bot.manage", http.HandlerFunc(h.patchBot)))
 	mux.Handle("DELETE /api/v2/bots/{id}", h.withAuth("bot.manage", http.HandlerFunc(h.deleteBot)))
 	mux.Handle("/api/v2/destinations", h.withAuth("bot.manage", http.HandlerFunc(h.destinations)))
+	mux.Handle("PATCH /api/v2/destinations/{id}", h.withAuth("bot.manage", http.HandlerFunc(h.patchDestination)))
+	mux.Handle("DELETE /api/v2/destinations/{id}", h.withAuth("bot.manage", http.HandlerFunc(h.deleteDestination)))
 	mux.Handle("/api/v2/rules", h.withAuth("rule.manage", http.HandlerFunc(h.rules)))
 	mux.Handle("PATCH /api/v2/rules/{id}", h.withAuth("rule.manage", http.HandlerFunc(h.patchRule)))
 	mux.Handle("DELETE /api/v2/rules/{id}", h.withAuth("rule.manage", http.HandlerFunc(h.deleteRule)))
@@ -185,12 +187,14 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	events, err := h.store.ListEvents(r.Context(), 100)
+	q := r.URL.Query()
+	limit, offset := parseListLimitOffset(r)
+	items, total, err := h.store.ListEvents(r.Context(), q.Get("source"), q.Get("level"), q.Get("status"), limit, offset)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, events)
+	writeJSON(w, map[string]any{"items": items, "total": total})
 }
 
 func (h *Handler) dashboard(w http.ResponseWriter, r *http.Request) {
@@ -211,12 +215,14 @@ func (h *Handler) audits(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	items, err := h.store.ListAuditLogs(r.Context(), 100)
+	q := r.URL.Query()
+	limit, offset := parseListLimitOffset(r)
+	items, total, err := h.store.ListAuditLogs(r.Context(), q.Get("action"), q.Get("object_type"), limit, offset)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, items)
+	writeJSON(w, map[string]any{"items": items, "total": total})
 }
 
 func (h *Handler) notifyV2(w http.ResponseWriter, r *http.Request) {

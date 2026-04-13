@@ -11,6 +11,7 @@ Go 模块：`github.com/yclenove/telegram-relay`（与 GitHub 仓库名 **telegr
 - 异步发送：事件入库后由 worker 轮询 `dispatch_jobs` 分发
 - 权限系统：登录鉴权 + RBAC 权限检查 + 审计日志
 - 可视化后台：独立仓库 **telegram-relay-admin**（构建 `dist` 后由 `ADMIN_STATIC_DIR` 挂载），调用 `/api/v2/*` 管理 API
+- 管理台能力清单与阶段完成情况见 [`docs/admin-console-plan.md`](docs/admin-console-plan.md)
 
 ## 主要接口
 
@@ -20,10 +21,10 @@ Go 模块：`github.com/yclenove/telegram-relay`（与 GitHub 仓库名 **telegr
 - 管理端接口
   - `POST /api/v2/auth/login`
   - `GET/POST /api/v2/bots`；`PATCH/DELETE /api/v2/bots/{id}`（需 `bot.manage`）
-  - `GET/POST /api/v2/destinations`（列表 + 创建）
+  - `GET/POST /api/v2/destinations`；`PATCH/DELETE /api/v2/destinations/{id}`（需 `bot.manage`）
   - `GET/POST /api/v2/rules`；`PATCH/DELETE /api/v2/rules/{id}`（需 `rule.manage`）
-  - `GET /api/v2/events`
-  - `GET /api/v2/audits`
+  - `GET /api/v2/events`：分页与筛选，响应 `{ items, total }`；查询参数 `limit`（默认 20，最大 200）、`offset`、`source`、`level`、`status`（精确匹配，可组合）
+  - `GET /api/v2/audits`：分页与筛选，响应 `{ items, total }`；查询参数 `limit`、`offset`、`action`、`object_type`（精确匹配，可组合）
   - `GET /api/v2/dashboard`
   - `GET /api/v2/roles`；`GET/POST /api/v2/users`、`PATCH/DELETE /api/v2/users/{id}`（需 `user.manage` 或 `system.manage`）
 
