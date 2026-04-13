@@ -114,7 +114,7 @@ func (s *Store) EnsureBootstrapData(ctx context.Context, username, passwordHash 
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
-	perms := []string{"bot.manage", "rule.manage", "event.read", "audit.read", "system.manage"}
+	perms := []string{"bot.manage", "rule.manage", "event.read", "audit.read", "system.manage", "user.manage"}
 	for _, p := range perms {
 		_, _ = tx.Exec(ctx, "INSERT INTO role_permissions(role_id, permission_code) VALUES($1,$2) ON CONFLICT DO NOTHING", roleID, p)
 	}
@@ -273,6 +273,29 @@ VALUES($1,$2,$3,$4,TRUE)
 RETURNING id,bot_id,name,chat_id,topic_id,parse_mode,is_enabled,created_at,updated_at
 `, botID, name, chatID, parseMode).Scan(&d.ID, &d.BotID, &d.Name, &d.ChatID, &d.TopicID, &d.ParseMode, &d.IsEnabled, &d.CreatedAt, &d.UpdatedAt)
 	return d, err
+}
+
+// ListDestinations 列出全部目标并带上机器人名称，供管理端下拉与表格展示。
+func (s *Store) ListDestinations(ctx context.Context) ([]domain.Destination, error) {
+	rows, err := s.pool.Query(ctx, `
+SELECT d.id, d.bot_id, b.name, d.name, d.chat_id, d.topic_id, d.parse_mode, d.is_enabled, d.created_at, d.updated_at
+FROM destinations d
+JOIN bots b ON b.id = d.bot_id
+ORDER BY d.id DESC
+`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Destination
+	for rows.Next() {
+		var d domain.Destination
+		if err := rows.Scan(&d.ID, &d.BotID, &d.BotName, &d.Name, &d.ChatID, &d.TopicID, &d.ParseMode, &d.IsEnabled, &d.CreatedAt, &d.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, nil
 }
 
 func (s *Store) CreateRule(ctx context.Context, name string, priority int, source, level string, destinationID int64) (domain.RoutingRule, error) {

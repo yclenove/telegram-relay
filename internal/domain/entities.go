@@ -15,9 +15,11 @@ type Bot struct {
 }
 
 // Destination 表示一个目标聊天配置（chat/topic/格式）。
+// BotName 仅在列表接口联表查询时填充，便于管理端展示。
 type Destination struct {
 	ID         int64     `json:"id"`
 	BotID      int64     `json:"bot_id"`
+	BotName    string    `json:"bot_name,omitempty"`
 	Name       string    `json:"name"`
 	ChatID     string    `json:"chat_id"`
 	TopicID    string    `json:"topic_id"`
@@ -88,4 +90,14 @@ type Role struct {
 	Name      string    `json:"name"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// UserSummary 用于管理端用户列表（不含密码哈希）。
+type UserSummary struct {
+	ID        int64     `json:"id"`
+	Username  string    `json:"username"`
+	IsEnabled bool      `json:"is_enabled"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	RoleIDs   []int64   `json:"role_ids"`
 }

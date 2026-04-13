@@ -1,0 +1,155 @@
+package v2
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/jackc/pgx/v5"
+
+	"github.com/yclenove/telegram-relay/internal/service"
+)
+
+func (h *Handler) listRoles(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	list, err := h.store.ListRoles(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, list)
+}
+
+func (h *Handler) listUsers(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	list, err := h.store.ListUserSummaries(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, list)
+}
+
+func (h *Handler) createUser(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Username  string  `json:"username"`
+		Password  string  `json:"password"`
+		IsEnabled *bool   `json:"is_enabled"`
+		RoleIDs   []int64 `json:"role_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	req.Username = strings.TrimSpace(req.Username)
+	if req.Username == "" || req.Password == "" {
+		http.Error(w, "username and password required", http.StatusBadRequest)
+		return
+	}
+	enabled := true
+	if req.IsEnabled != nil {
+		enabled = *req.IsEnabled
+	}
+	if _, err := h.store.GetUserByUsername(r.Context(), req.Username); err == nil {
+		http.Error(w, "username already exists", http.StatusConflict)
+		return
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := h.store.ValidateRoleIDsExist(r.Context(), req.RoleIDs); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	hash := service.HashPassword(req.Password)
+	out, err := h.store.CreateUserWithRoles(r.Context(), req.Username, hash, enabled, req.RoleIDs)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	h.writeAuditFromRequest(r, "user.create", "user", strconv.FormatInt(out.ID, 10), req)
+	writeJSON(w, out)
+}
+
+func (h *Handler) patchUser(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPatch {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	idStr := r.PathValue("id")
+	uid, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || uid <= 0 {
+		http.Error(w, "invalid user id", http.StatusBadRequest)
+		return
+	}
+	if _, err := h.store.GetUserByID(r.Context(), uid); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			http.Error(w, "user not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	var req struct {
+		IsEnabled *bool    `json:"is_enabled"`
+		Password  string   `json:"password"`
+		RoleIDs   *[]int64 `json:"role_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	var pwdHash *string
+	if strings.TrimSpace(req.Password) != "" {
+		ph := service.HashPassword(req.Password)
+		pwdHash = &ph
+	}
+	if req.RoleIDs != nil {
+		if err := h.store.ValidateRoleIDsExist(r.Context(), *req.RoleIDs); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	out, err := h.store.UpdateUserPatch(r.Context(), uid, req.IsEnabled, pwdHash, req.RoleIDs)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	h.writeAuditFromRequest(r, "user.update", "user", strconv.FormatInt(uid, 10), req)
+	writeJSON(w, out)
+}
+
+func (h *Handler) deleteUser(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	idStr := r.PathValue("id")
+	uid, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil || uid <= 0 {
+		http.Error(w, "invalid user id", http.StatusBadRequest)
+		return
+	}
+	if err := h.store.DeleteUser(r.Context(), uid); err != nil {
+		if strings.Contains(err.Error(), "最后一个超级管理员") {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	h.writeAuditFromRequest(r, "user.delete", "user", idStr, map[string]any{"id": uid})
+	w.WriteHeader(http.StatusNoContent)
+}

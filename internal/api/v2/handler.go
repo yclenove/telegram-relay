@@ -46,6 +46,12 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("/api/v2/audits", h.withAuth("audit.read", http.HandlerFunc(h.audits)))
 	mux.Handle("/api/v2/dashboard", h.withAuth("event.read", http.HandlerFunc(h.dashboard)))
 	mux.Handle("/api/v2/notify", http.HandlerFunc(h.notifyV2))
+	// 用户与角色管理（Go 1.22+ 方法路由，与旧式路径匹配并存）
+	mux.Handle("GET /api/v2/roles", h.withAuth("user.manage", http.HandlerFunc(h.listRoles)))
+	mux.Handle("GET /api/v2/users", h.withAuth("user.manage", http.HandlerFunc(h.listUsers)))
+	mux.Handle("POST /api/v2/users", h.withAuth("user.manage", http.HandlerFunc(h.createUser)))
+	mux.Handle("PATCH /api/v2/users/{id}", h.withAuth("user.manage", http.HandlerFunc(h.patchUser)))
+	mux.Handle("DELETE /api/v2/users/{id}", h.withAuth("user.manage", http.HandlerFunc(h.deleteUser)))
 }
 
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
@@ -106,27 +112,35 @@ func (h *Handler) bots(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) destinations(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+	switch r.Method {
+	case http.MethodGet:
+		list, err := h.store.ListDestinations(r.Context())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, list)
+	case http.MethodPost:
+		var req struct {
+			BotID     int64  `json:"bot_id"`
+			Name      string `json:"name"`
+			ChatID    string `json:"chat_id"`
+			ParseMode string `json:"parse_mode"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid payload", http.StatusBadRequest)
+			return
+		}
+		out, err := h.store.CreateDestination(r.Context(), req.BotID, req.Name, req.ChatID, req.ParseMode)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		h.writeAuditFromRequest(r, "destination.create", "destination", strconv.FormatInt(out.ID, 10), req)
+		writeJSON(w, out)
+	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
 	}
-	var req struct {
-		BotID     int64  `json:"bot_id"`
-		Name      string `json:"name"`
-		ChatID    string `json:"chat_id"`
-		ParseMode string `json:"parse_mode"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid payload", http.StatusBadRequest)
-		return
-	}
-	out, err := h.store.CreateDestination(r.Context(), req.BotID, req.Name, req.ChatID, req.ParseMode)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	h.writeAuditFromRequest(r, "destination.create", "destination", strconv.FormatInt(out.ID, 10), req)
-	writeJSON(w, out)
 }
 
 func (h *Handler) rules(w http.ResponseWriter, r *http.Request) {
