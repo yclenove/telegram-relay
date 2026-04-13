@@ -3,6 +3,8 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -111,6 +113,8 @@ func Load() (Config, error) {
 	}
 
 	overrideFromEnv(&cfg)
+	// 与 MCP 等工具共用 PG_* 分项时，避免重复维护一整条 DATABASE_DSN。
+	applyDatabaseDSNFromPGEnv(&cfg)
 	if err := validate(cfg); err != nil {
 		return cfg, err
 	}
@@ -220,6 +224,38 @@ func overrideFromEnv(cfg *Config) {
 	setString("ADMIN_STATIC_DIR", &cfg.Web.AdminStaticDir)
 }
 
+// applyDatabaseDSNFromPGEnv 在未设置 DATABASE_DSN 时，用 PG_HOST/PG_USER/PG_PASSWORD 等拼出 libpq 风格连接串。
+// 密码中的特殊字符由 net/url.UserPassword 编码，避免手写 DSN 出错；仅当 PG_HOST 与 PG_USER 均非空时才生效。
+func applyDatabaseDSNFromPGEnv(cfg *Config) {
+	if strings.TrimSpace(cfg.Database.DSN) != "" {
+		return
+	}
+	host := strings.TrimSpace(os.Getenv("PG_HOST"))
+	user := strings.TrimSpace(os.Getenv("PG_USER"))
+	pass := os.Getenv("PG_PASSWORD")
+	if host == "" || user == "" {
+		return
+	}
+	port := strings.TrimSpace(os.Getenv("PG_PORT"))
+	if port == "" {
+		port = "5432"
+	}
+	db := strings.TrimSpace(os.Getenv("PG_DATABASE"))
+	if db == "" {
+		db = "telegram"
+	}
+	u := &url.URL{
+		Scheme: "postgres",
+		User:   url.UserPassword(user, pass),
+		Host:   net.JoinHostPort(host, port),
+		Path:   "/" + db,
+	}
+	q := u.Query()
+	q.Set("sslmode", "disable")
+	u.RawQuery = q.Encode()
+	cfg.Database.DSN = u.String()
+}
+
 // splitCSV 将逗号分隔字符串转换为切片，用于白名单等配置项。
 func splitCSV(raw string) []string {
 	parts := strings.Split(raw, ",")
@@ -241,7 +277,7 @@ func validate(cfg Config) error {
 		return fmt.Errorf("unsupported security level: %s", cfg.Security.Level)
 	}
 	if cfg.Security.Token == "" {
-		return errors.New("missing auth token")
+		return errors.New("missing auth token：请设置环境变量 AUTH_TOKEN，或在私密 YAML 中配置 security.token；仓库根目录的 .env 会在启动时自动加载（若存在）")
 	}
 	if cfg.Security.Level != "basic" && cfg.Security.HMACSecret == "" {
 		return errors.New("missing HMAC secret for medium/strict mode")

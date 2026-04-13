@@ -8,7 +8,10 @@ require golang.org/x/time v0.11.0
 
 require github.com/golang-jwt/jwt/v5 v5.2.2
 
-require github.com/jackc/pgx/v5 v5.7.6
+require (
+	github.com/jackc/pgx/v5 v5.7.6
+	github.com/joho/godotenv v1.5.1
+)
 
 require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect

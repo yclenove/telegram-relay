@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
 	"golang.org/x/time/rate"
 
 	apiv2 "github.com/yclenove/telegram-relay/internal/api/v2"
@@ -31,7 +32,16 @@ func main() {
 	// 使用 JSON 日志，便于后续接入 Loki/ELK 或通过 grep 分析字段。
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
-	// 配置优先级：默认值 < 配置文件 < 环境变量。
+	// 本地开发常在仓库根放 .env（已在 .gitignore）；存在则注入进程环境变量，便于直接执行 go run。
+	// 生产环境仍推荐由编排或系统注入环境变量，不依赖磁盘上的 .env 文件。
+	if _, err := os.Stat(".env"); err == nil {
+		if err := godotenv.Load(".env"); err != nil {
+			logger.Error("load .env failed", "error", err)
+			os.Exit(1)
+		}
+	}
+
+	// 配置优先级：默认值 < 配置文件 < 环境变量（含 .env 注入项）。
 	cfg, err := config.Load()
 	if err != nil {
 		logger.Error("load config failed", "error", err)

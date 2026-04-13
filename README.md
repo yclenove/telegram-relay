@@ -45,8 +45,10 @@ go run ./cmd/relay
 ## 本地启动（PostgreSQL）
 
 1. 准备 PostgreSQL，并创建数据库 `telegram`
-2. 设置私密配置中的 `database.dsn`、`auth.jwt_secret`、`auth.bootstrap_password`
-3. 启动服务（自动执行 `migrations/*.sql`）
+2. 在仓库根复制环境变量模板并填写：`copy .env.example .env`（PowerShell）或 `cp .env.example .env`（Unix）。  
+   启动时若存在 `.env` 会自动加载；未设置 `DATABASE_DSN` 时可用 `PG_HOST` / `PG_USER` / `PG_PASSWORD` / `PG_DATABASE` 自动拼接（与 MCP 常用变量一致）。
+3. 或使用私密 YAML：设置 `database.dsn`、`auth.jwt_secret`、`auth.bootstrap_password` 等（见 `configs/config.private.example.yaml`）
+4. 启动服务（自动执行 `migrations/*.sql`）
 
 ```bash
 go mod tidy
