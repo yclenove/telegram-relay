@@ -1,0 +1,18 @@
+server:
+  listen_addr: ":8080"
+
+security:
+  level: "medium"
+  timestamp_skew_sec: 300
+  rate_limit_per_second: 20
+  rate_limit_burst: 40
+
+telegram:
+  parse_mode: "HTML"
+  api_base_url: "https://api.telegram.org"
+  timeout_sec: 5
+
+retry:
+  max_attempts: 3
+  initial_backoff_ms: 300
+  max_backoff_ms: 3000

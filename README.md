@@ -65,6 +65,26 @@
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
 
+## 配置安全分层（推荐）
+
+建议拆分为两份：
+
+- 公开配置：`configs/config.public.yaml`（可入库）
+- 私密配置：`configs/config.private.yaml`（已在 `.gitignore` 忽略，不入库）
+
+示例模板：
+
+- `configs/config.public.example.yaml`
+- `configs/config.private.example.yaml`
+
+启动时通过环境变量加载：
+
+```bash
+export CONFIG_PUBLIC_FILE="configs/config.public.yaml"
+export CONFIG_PRIVATE_FILE="configs/config.private.yaml"
+go run ./cmd/relay
+```
+
 ## 本地运行
 
 ```bash

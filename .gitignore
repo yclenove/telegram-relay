@@ -2,3 +2,8 @@ relay
 *.exe
 *.log
 .env
+configs/config.private.yaml
+.env.local
+secrets/
+configs/private/config.local.yaml
+configs/private/*.secret.yaml

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -61,13 +62,22 @@ type RetryConfig struct {
 // 4) 执行校验
 func Load() (Config, error) {
 	cfg := defaultConfig()
+
+	// 兼容单文件模式：CONFIG_FILE
 	if path := os.Getenv("CONFIG_FILE"); path != "" {
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return cfg, fmt.Errorf("read config file: %w", err)
+		if err := mergeYAML(path, &cfg); err != nil {
+			return cfg, err
 		}
-		if err := yaml.Unmarshal(content, &cfg); err != nil {
-			return cfg, fmt.Errorf("parse config file: %w", err)
+	}
+	// 推荐分层模式：公开配置 + 私密配置（私密文件不入库）。
+	if path := os.Getenv("CONFIG_PUBLIC_FILE"); path != "" {
+		if err := mergeYAML(path, &cfg); err != nil {
+			return cfg, err
+		}
+	}
+	if path := os.Getenv("CONFIG_PRIVATE_FILE"); path != "" {
+		if err := mergeYAML(path, &cfg); err != nil {
+			return cfg, err
 		}
 	}
 
@@ -204,6 +214,17 @@ func validate(cfg Config) error {
 	}
 	if _, err := time.ParseDuration(fmt.Sprintf("%ds", cfg.Telegram.TimeoutSec)); err != nil {
 		return fmt.Errorf("invalid telegram timeout: %w", err)
+	}
+	return nil
+}
+
+func mergeYAML(path string, cfg *Config) error {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read config file %s: %w", filepath.Clean(path), err)
+	}
+	if err := yaml.Unmarshal(content, cfg); err != nil {
+		return fmt.Errorf("parse config file %s: %w", filepath.Clean(path), err)
 	}
 	return nil
 }
