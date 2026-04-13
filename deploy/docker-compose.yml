@@ -6,7 +6,7 @@ services:
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
-      - POSTGRES_DB=telegram_relay
+      - POSTGRES_DB=telegram
     ports:
       - "5432:5432"
     volumes:
@@ -23,7 +23,7 @@ services:
       - "8080:8080"
     environment:
       - LISTEN_ADDR=:8080
-      - DATABASE_DSN=postgres://postgres:postgres@postgres:5432/telegram_relay?sslmode=disable
+      - DATABASE_DSN=postgres://postgres:postgres@postgres:5432/telegram?sslmode=disable
       - SECURITY_LEVEL=medium
       - AUTH_TOKEN=replace-with-strong-token
       - HMAC_SECRET=replace-with-hmac-secret

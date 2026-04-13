@@ -44,7 +44,7 @@ go run ./cmd/relay
 
 ## 本地启动（PostgreSQL）
 
-1. 准备 PostgreSQL，并创建数据库 `telegram_relay`
+1. 准备 PostgreSQL，并创建数据库 `telegram`
 2. 设置私密配置中的 `database.dsn`、`auth.jwt_secret`、`auth.bootstrap_password`
 3. 启动服务（自动执行 `migrations/*.sql`）
 
