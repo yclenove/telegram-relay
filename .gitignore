@@ -1,3 +1,5 @@
+# Cursor 编辑器本地目录，避免未跟踪文件干扰 git 状态
+.cursor/
 /relay
 *.exe
 *.log
