@@ -19,6 +19,8 @@ Docker / systemd 示例见仓库 `deploy/` 目录。
 
 **可以。** 任意能发起 HTTPS/HTTP 的客户端，向本服务提交 **POST** 即可。
 
+更完整的对接清单、示例代码与「多接入方密钥」能力边界见 **[第三方接入说明](./third-party-integration.md)**。
+
 ### 3.1 路径与请求体
 
 | 路径 | 说明 |

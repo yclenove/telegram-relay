@@ -17,6 +17,7 @@ Go 模块：`github.com/yclenove/telegram-relay`（与 GitHub 仓库名 **telegr
 
 - [快速功能指引](docs/user-quick-guide.md)：首次部署、管理台配置顺序、常见问题
 - [使用手册](docs/user-manual.md)：概念说明、RBAC、外部 HTTP 接入（v1/v2、鉴权、反代注意）、运维链接
+- [第三方接入说明](docs/third-party-integration.md)：对接步骤、请求示例、错误码；**说明当前为全局单 Token / 单 HMAC，尚无按接入方独立密钥**
 
 ## 主要接口
 
