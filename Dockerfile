@@ -14,5 +14,5 @@ COPY --from=builder /app/relay /app/relay
 COPY --from=builder /app/configs /app/configs
 COPY --from=builder /app/migrations /app/migrations
 USER relay
-EXPOSE 8080
+EXPOSE 8780
 ENTRYPOINT ["/app/relay"]

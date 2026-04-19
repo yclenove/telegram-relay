@@ -20,9 +20,9 @@ services:
     container_name: telegram-relay
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "8780:8780"
     environment:
-      - LISTEN_ADDR=:8080
+      - LISTEN_ADDR=:8780
       - DATABASE_DSN=postgres://postgres:postgres@postgres:5432/telegram?sslmode=disable
       - SECURITY_LEVEL=medium
       - AUTH_TOKEN=replace-with-strong-token

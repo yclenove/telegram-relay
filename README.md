@@ -13,6 +13,11 @@ Go 模块：`github.com/yclenove/telegram-relay`（与 GitHub 仓库名 **telegr
 - 可视化后台：独立仓库 **telegram-relay-admin**（构建 `dist` 后由 `ADMIN_STATIC_DIR` 挂载），调用 `/api/v2/*` 管理 API
 - 管理台能力清单与阶段完成情况见 [`docs/admin-console-plan.md`](docs/admin-console-plan.md)
 
+## 文档
+
+- [快速功能指引](docs/user-quick-guide.md)：首次部署、管理台配置顺序、常见问题
+- [使用手册](docs/user-manual.md)：概念说明、RBAC、外部 HTTP 接入（v1/v2、鉴权、反代注意）、运维链接
+
 ## 主要接口
 
 - 公开接口
@@ -28,6 +33,7 @@ Go 模块：`github.com/yclenove/telegram-relay`（与 GitHub 仓库名 **telegr
   - `GET /api/v2/dispatch-jobs`：发送任务分页列表，响应 `{ items, total }`；查询参数 `limit`、`offset`、`status`（需 `event.read`）
   - `GET /api/v2/audits`：分页与筛选，响应 `{ items, total }`；查询参数含 `object_id`、`actor_user_id`、`created_after`/`created_before`（RFC3339）等（需 `audit.read`）
   - `GET /api/v2/dashboard`
+  - `POST /api/v2/notify-test`：与 v2 入队相同 JSON 校验，经 JWT 入队（需 `bot.manage` 或 `system.manage`），并写审计 `notify.test`；供管理台「测试推送」，无需在浏览器配置 `AUTH_TOKEN`
   - `GET /api/v2/roles`；`GET /api/v2/roles/{id}/permissions`（只读权限码列表）；`GET/POST /api/v2/users`、`PATCH/DELETE /api/v2/users/{id}`（需 `user.manage` 或 `system.manage`）
 
 ### 入队语义说明

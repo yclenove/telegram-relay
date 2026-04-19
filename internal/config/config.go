@@ -132,7 +132,8 @@ func Load() (Config, error) {
 func defaultConfig() Config {
 	return Config{
 		Server: ServerConfig{
-			ListenAddr: ":8080",
+			// 默认避开本机常见 8080 占用；生产请用 LISTEN_ADDR 或 YAML 显式配置。
+			ListenAddr: ":8780",
 		},
 		Security: SecurityConfig{
 			Level:              "basic",

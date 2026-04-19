@@ -53,3 +53,4 @@
 - [x] **仪表盘**：近 24 小时事件数、失败任务数等指标
 - [x] **角色只读增强**：`GET /api/v2/roles/{id}/permissions` 列出角色权限码；管理端「角色与权限」只读页
 - [x] **前端 Vitest**：`buildListQuery` 工具函数单测
+- [x] **帮助与测试推送**：后端 `POST /api/v2/notify-test`（JWT + `bot.manage` + 审计）；管理端 `/help`、`/notify-test`；用户文档 `docs/user-quick-guide.md`、`docs/user-manual.md`

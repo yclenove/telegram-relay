@@ -69,6 +69,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("/api/v2/dashboard", h.withAuth("event.read", http.HandlerFunc(h.dashboard)))
 	// 与 /api/v1/notify 相同：Bearer/HMAC（按 security.level）+ 全局限流，避免公开入队被滥用。
 	mux.Handle("/api/v2/notify", http.HandlerFunc(h.notifyV2Secure))
+	// 管理端测试入队：走 JWT + bot.manage，避免浏览器持有 AUTH_TOKEN 直调公开 notify。
+	mux.Handle("/api/v2/notify-test", h.withAuth("bot.manage", http.HandlerFunc(h.notifyTest)))
 	// 用户与角色管理（Go 1.22+ 方法路由，与旧式路径匹配并存）
 	mux.Handle("GET /api/v2/roles", h.withAuth("user.manage", http.HandlerFunc(h.listRoles)))
 	mux.Handle("GET /api/v2/roles/{id}/permissions", h.withAuth("user.manage", http.HandlerFunc(h.listRolePermissions)))
@@ -339,6 +341,34 @@ func (h *Handler) notifyV2Body(w http.ResponseWriter, r *http.Request, body []by
 	writeJSON(w, map[string]any{"event_db_id": id, "status": "queued"})
 }
 
+func (h *Handler) notifyTest(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "read body failed", http.StatusBadRequest)
+		return
+	}
+	var req model.NotifyRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(req.Title) == "" || strings.TrimSpace(req.Source) == "" || strings.TrimSpace(req.Message) == "" {
+		http.Error(w, "missing required fields", http.StatusBadRequest)
+		return
+	}
+	id, err := h.notifySvc.Ingest(r.Context(), req, body)
+	if err != nil {
+		h.badGateway(w, r, err)
+		return
+	}
+	h.writeAuditFromRequest(r, "notify.test", "event", strconv.FormatInt(id, 10), map[string]any{"source": req.Source, "title": req.Title})
+	writeJSON(w, map[string]any{"event_db_id": id, "status": "queued"})
+}
+
 func (h *Handler) withAuth(permission string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := strings.TrimSpace(r.Header.Get("Authorization"))
@@ -362,6 +392,9 @@ func (h *Handler) withAuth(permission string, next http.Handler) http.Handler {
 }
 
 func (h *Handler) writeAuditFromRequest(r *http.Request, action, objectType, objectID string, detail any) {
+	if h.store == nil {
+		return
+	}
 	uid, ok := uidFromContext(r.Context())
 	if !ok {
 		return

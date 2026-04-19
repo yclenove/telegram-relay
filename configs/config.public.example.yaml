@@ -1,5 +1,5 @@
 server:
-  listen_addr: ":8080"
+  listen_addr: ":8780"
 
 security:
   level: "medium"

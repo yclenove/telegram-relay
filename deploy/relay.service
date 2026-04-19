@@ -10,7 +10,7 @@ Restart=always
 RestartSec=3
 User=relay
 Group=relay
-Environment=LISTEN_ADDR=:8080
+Environment=LISTEN_ADDR=:8780
 Environment=SECURITY_LEVEL=medium
 Environment=AUTH_TOKEN=replace-with-strong-token
 Environment=HMAC_SECRET=replace-with-hmac-secret

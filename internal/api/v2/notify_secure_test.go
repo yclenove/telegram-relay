@@ -8,12 +8,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/time/rate"
 
 	"github.com/yclenove/telegram-relay/internal/config"
 	"github.com/yclenove/telegram-relay/internal/model"
 	"github.com/yclenove/telegram-relay/internal/security"
+	"github.com/yclenove/telegram-relay/internal/service"
 )
 
 type stubIngester struct {
@@ -77,5 +80,80 @@ func TestNotifyV2_OKWithBearer(t *testing.T) {
 	}
 	if !stub.called {
 		t.Fatal("expected ingest called")
+	}
+}
+
+func testAccessJWT(t *testing.T, secret string, uid int64, perms []string) string {
+	t.Helper()
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"typ":   "access",
+		"uid":   float64(uid),
+		"perms": perms,
+		"exp":   time.Now().Add(time.Minute).Unix(),
+	})
+	raw, err := token.SignedString([]byte(secret))
+	if err != nil {
+		t.Fatalf("sign token: %v", err)
+	}
+	return raw
+}
+
+func TestNotifyTest_UnauthorizedWithoutBearer(t *testing.T) {
+	t.Parallel()
+	stub := &stubIngester{id: 1}
+	authSvc := service.NewAuthService(nil, config.AuthConfig{JWTSecret: "unit-secret", AccessTokenTTLMin: 60, RefreshTokenTTLMin: 1440})
+	h := NewHandler(slog.Default(), nil, authSvc, stub, nil, nil)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/notify-test", bytes.NewReader([]byte(`{"title":"a","source":"s","message":"m"}`)))
+	h.withAuth("bot.manage", http.HandlerFunc(h.notifyTest)).ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", rec.Code)
+	}
+	if stub.called {
+		t.Fatal("ingest should not run")
+	}
+}
+
+func TestNotifyTest_ForbiddenWithoutBotManage(t *testing.T) {
+	t.Parallel()
+	stub := &stubIngester{id: 2}
+	authSvc := service.NewAuthService(nil, config.AuthConfig{JWTSecret: "unit-secret", AccessTokenTTLMin: 60, RefreshTokenTTLMin: 1440})
+	h := NewHandler(slog.Default(), nil, authSvc, stub, nil, nil)
+	raw := testAccessJWT(t, "unit-secret", 9, []string{"event.read"})
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/notify-test", bytes.NewReader([]byte(`{"title":"a","source":"s","message":"m"}`)))
+	req.Header.Set("Authorization", "Bearer "+raw)
+	h.withAuth("bot.manage", http.HandlerFunc(h.notifyTest)).ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", rec.Code)
+	}
+	if stub.called {
+		t.Fatal("ingest should not run")
+	}
+}
+
+func TestNotifyTest_OKWithBotManageJWT(t *testing.T) {
+	t.Parallel()
+	stub := &stubIngester{id: 42}
+	authSvc := service.NewAuthService(nil, config.AuthConfig{JWTSecret: "unit-secret", AccessTokenTTLMin: 60, RefreshTokenTTLMin: 1440})
+	h := NewHandler(slog.Default(), nil, authSvc, stub, nil, nil)
+	raw := testAccessJWT(t, "unit-secret", 3, []string{"bot.manage"})
+	body := []byte(`{"title":"t","source":"s","message":"m"}`)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v2/notify-test", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+raw)
+	h.withAuth("bot.manage", http.HandlerFunc(h.notifyTest)).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if !stub.called {
+		t.Fatal("expected ingest called")
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp["status"] != "queued" {
+		t.Fatalf("unexpected status: %v", resp["status"])
 	}
 }
