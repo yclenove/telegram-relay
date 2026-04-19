@@ -26,7 +26,7 @@ func (h *Handler) getEvent(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.serverError(w, r, err)
 		return
 	}
 	writeJSON(w, e)

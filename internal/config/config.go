@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/url"
 	"os"
@@ -166,7 +167,7 @@ func defaultConfig() Config {
 }
 
 // overrideFromEnv 从环境变量读取参数并覆盖配置文件中的值。
-// 设计为静默忽略非法值，避免因为单个配置项格式错误导致服务无法启动。
+// 数值类非法格式会记录到 stderr 并跳过该项，避免单个环境变量拼写错误导致进程无法启动。
 func overrideFromEnv(cfg *Config) {
 	setString := func(env string, dst *string) {
 		if v := os.Getenv(env); v != "" {
@@ -177,6 +178,8 @@ func overrideFromEnv(cfg *Config) {
 		if v := os.Getenv(env); v != "" {
 			if n, err := strconv.Atoi(v); err == nil {
 				*dst = n
+			} else {
+				log.Printf("config: 忽略无效环境变量 %s=%q: %v", env, v, err)
 			}
 		}
 	}
@@ -184,6 +187,8 @@ func overrideFromEnv(cfg *Config) {
 		if v := os.Getenv(env); v != "" {
 			if n, err := strconv.ParseInt(v, 10, 64); err == nil {
 				*dst = n
+			} else {
+				log.Printf("config: 忽略无效环境变量 %s=%q: %v", env, v, err)
 			}
 		}
 	}
@@ -191,6 +196,8 @@ func overrideFromEnv(cfg *Config) {
 		if v := os.Getenv(env); v != "" {
 			if n, err := strconv.ParseFloat(v, 64); err == nil {
 				*dst = n
+			} else {
+				log.Printf("config: 忽略无效环境变量 %s=%q: %v", env, v, err)
 			}
 		}
 	}

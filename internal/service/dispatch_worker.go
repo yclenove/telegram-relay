@@ -15,20 +15,21 @@ import (
 
 // DispatchWorker 周期扫描待发送任务并投递到 Telegram。
 type DispatchWorker struct {
-	logger      *slog.Logger
-	store       *postgres.Store
-	retryCfg    config.RetryConfig
-	workerCfg   config.WorkerConfig
-	defaultMode string
+	logger       *slog.Logger
+	store        *postgres.Store
+	retryCfg     config.RetryConfig
+	workerCfg    config.WorkerConfig
+	telegramBase config.TelegramConfig
 }
 
-func NewDispatchWorker(logger *slog.Logger, store *postgres.Store, retryCfg config.RetryConfig, workerCfg config.WorkerConfig, defaultMode string) *DispatchWorker {
+// NewDispatchWorker 创建 worker；telegramBase 提供与主进程一致的 Bot API 基址与超时，避免与全局配置分叉。
+func NewDispatchWorker(logger *slog.Logger, store *postgres.Store, retryCfg config.RetryConfig, workerCfg config.WorkerConfig, telegramBase config.TelegramConfig) *DispatchWorker {
 	return &DispatchWorker{
-		logger:      logger,
-		store:       store,
-		retryCfg:    retryCfg,
-		workerCfg:   workerCfg,
-		defaultMode: defaultMode,
+		logger:       logger,
+		store:        store,
+		retryCfg:     retryCfg,
+		workerCfg:    workerCfg,
+		telegramBase: telegramBase,
 	}
 }
 
@@ -67,11 +68,11 @@ func (w *DispatchWorker) handleJob(ctx context.Context, jobID int64) {
 		BotToken:   postgres.DecryptSecret(bot.BotTokenEnc),
 		ChatID:     destination.ChatID,
 		ParseMode:  destination.ParseMode,
-		APIBaseURL: "https://api.telegram.org",
-		TimeoutSec: 5,
+		APIBaseURL: w.telegramBase.APIBaseURL,
+		TimeoutSec: w.telegramBase.TimeoutSec,
 	})
-	service := relaylegacy.NewService(client, w.retryCfg)
-	err = service.Send(ctx, model.NotifyRequest{
+	relaySvc := relaylegacy.NewService(client, w.retryCfg)
+	err = relaySvc.Send(ctx, model.NotifyRequest{
 		Title:   event.Title,
 		Message: event.Message,
 		Level:   event.Level,

@@ -9,8 +9,11 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/time/rate"
+
 	"github.com/yclenove/telegram-relay/internal/model"
 	"github.com/yclenove/telegram-relay/internal/repository/postgres"
+	"github.com/yclenove/telegram-relay/internal/security"
 	"github.com/yclenove/telegram-relay/internal/service"
 )
 
@@ -20,25 +23,36 @@ const (
 	contextUserID contextKey = "uid"
 )
 
+// notifyIngester 由异步入队服务实现；测试可注入桩，避免依赖真实数据库。
+type notifyIngester interface {
+	Ingest(ctx context.Context, req model.NotifyRequest, rawBody []byte) (int64, error)
+}
+
 // Handler 提供 v2 管理 API。
 type Handler struct {
 	logger    *slog.Logger
 	store     *postgres.Store
 	authSvc   *service.AuthService
-	notifySvc *service.NotifyService
+	notifySvc notifyIngester
+	verifier  *security.Verifier
+	limiter   *rate.Limiter
 }
 
-func NewHandler(logger *slog.Logger, store *postgres.Store, authSvc *service.AuthService, notifySvc *service.NotifyService) *Handler {
+// NewHandler 组装 v2 处理器；verifier 与 limiter 用于 /api/v2/notify，与 v1 入站安全模型对齐。
+func NewHandler(logger *slog.Logger, store *postgres.Store, authSvc *service.AuthService, notifySvc notifyIngester, verifier *security.Verifier, limiter *rate.Limiter) *Handler {
 	return &Handler{
 		logger:    logger,
 		store:     store,
 		authSvc:   authSvc,
 		notifySvc: notifySvc,
+		verifier:  verifier,
+		limiter:   limiter,
 	}
 }
 
 func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v2/auth/login", h.login)
+	mux.HandleFunc("/api/v2/auth/refresh", h.refresh)
 	mux.Handle("/api/v2/bots", h.withAuth("bot.manage", http.HandlerFunc(h.bots)))
 	mux.Handle("PATCH /api/v2/bots/{id}", h.withAuth("bot.manage", http.HandlerFunc(h.patchBot)))
 	mux.Handle("DELETE /api/v2/bots/{id}", h.withAuth("bot.manage", http.HandlerFunc(h.deleteBot)))
@@ -53,7 +67,8 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("GET /api/v2/dispatch-jobs", h.withAuth("event.read", http.HandlerFunc(h.listDispatchJobs)))
 	mux.Handle("/api/v2/audits", h.withAuth("audit.read", http.HandlerFunc(h.audits)))
 	mux.Handle("/api/v2/dashboard", h.withAuth("event.read", http.HandlerFunc(h.dashboard)))
-	mux.Handle("/api/v2/notify", http.HandlerFunc(h.notifyV2))
+	// 与 /api/v1/notify 相同：Bearer/HMAC（按 security.level）+ 全局限流，避免公开入队被滥用。
+	mux.Handle("/api/v2/notify", http.HandlerFunc(h.notifyV2Secure))
 	// 用户与角色管理（Go 1.22+ 方法路由，与旧式路径匹配并存）
 	mux.Handle("GET /api/v2/roles", h.withAuth("user.manage", http.HandlerFunc(h.listRoles)))
 	mux.Handle("GET /api/v2/roles/{id}/permissions", h.withAuth("user.manage", http.HandlerFunc(h.listRolePermissions)))
@@ -76,12 +91,40 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
-	token, perms, _, err := h.authSvc.Login(r.Context(), strings.TrimSpace(req.Username), req.Password)
+	access, refresh, perms, _, err := h.authSvc.Login(r.Context(), strings.TrimSpace(req.Username), req.Password)
 	if err != nil {
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
-	writeJSON(w, map[string]any{"access_token": token, "permissions": jsonSlice(perms)})
+	writeJSON(w, map[string]any{
+		"access_token":  access,
+		"refresh_token": refresh,
+		"permissions":   jsonSlice(perms),
+	})
+}
+
+func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+	access, newRefresh, perms, err := h.authSvc.Refresh(r.Context(), strings.TrimSpace(req.RefreshToken))
+	if err != nil {
+		http.Error(w, "invalid refresh token", http.StatusUnauthorized)
+		return
+	}
+	writeJSON(w, map[string]any{
+		"access_token":  access,
+		"refresh_token": newRefresh,
+		"permissions":   jsonSlice(perms),
+	})
 }
 
 func (h *Handler) bots(w http.ResponseWriter, r *http.Request) {
@@ -89,7 +132,7 @@ func (h *Handler) bots(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		list, err := h.store.ListBots(r.Context())
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			h.serverError(w, r, err)
 			return
 		}
 		for i := range list {
@@ -109,7 +152,7 @@ func (h *Handler) bots(w http.ResponseWriter, r *http.Request) {
 		}
 		created, err := h.store.CreateBot(r.Context(), req.Name, req.BotToken, req.Remark, req.IsDefault)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			h.badRequestLogged(w, r, "invalid request", err)
 			return
 		}
 		created.BotTokenEnc = ""
@@ -125,7 +168,7 @@ func (h *Handler) destinations(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		list, err := h.store.ListDestinations(r.Context())
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			h.serverError(w, r, err)
 			return
 		}
 		writeJSON(w, jsonSlice(list))
@@ -142,7 +185,7 @@ func (h *Handler) destinations(w http.ResponseWriter, r *http.Request) {
 		}
 		out, err := h.store.CreateDestination(r.Context(), req.BotID, req.Name, req.ChatID, req.ParseMode)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			h.badRequestLogged(w, r, "invalid request", err)
 			return
 		}
 		h.writeAuditFromRequest(r, "destination.create", "destination", strconv.FormatInt(out.ID, 10), req)
@@ -157,7 +200,7 @@ func (h *Handler) rules(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		rules, err := h.store.ListRules(r.Context())
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			h.serverError(w, r, err)
 			return
 		}
 		writeJSON(w, jsonSlice(rules))
@@ -181,7 +224,7 @@ func (h *Handler) rules(w http.ResponseWriter, r *http.Request) {
 		}
 		item, err := h.store.CreateRule(r.Context(), req.Name, req.Priority, req.MatchSource, req.MatchLevel, ml, req.DestinationID)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			h.badRequestLogged(w, r, "invalid request", err)
 			return
 		}
 		h.writeAuditFromRequest(r, "rule.create", "rule", strconv.FormatInt(item.ID, 10), req)
@@ -200,7 +243,7 @@ func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
 	limit, offset := parseListLimitOffset(r)
 	items, total, err := h.store.ListEvents(r.Context(), q.Get("source"), q.Get("level"), q.Get("status"), limit, offset)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.serverError(w, r, err)
 		return
 	}
 	writeJSON(w, map[string]any{"items": jsonSlice(items), "total": total})
@@ -213,7 +256,7 @@ func (h *Handler) dashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	stats, err := h.store.DashboardStats(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.serverError(w, r, err)
 		return
 	}
 	writeJSON(w, stats)
@@ -247,15 +290,20 @@ func (h *Handler) audits(w http.ResponseWriter, r *http.Request) {
 	}
 	items, total, err := h.store.ListAuditLogs(r.Context(), q.Get("action"), q.Get("object_type"), q.Get("object_id"), actorPtr, createdAfter, createdBefore, limit, offset)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.serverError(w, r, err)
 		return
 	}
 	writeJSON(w, map[string]any{"items": jsonSlice(items), "total": total})
 }
 
-func (h *Handler) notifyV2(w http.ResponseWriter, r *http.Request) {
+// notifyV2Secure 对入队接口执行与 v1 相同的限流与安全校验，再进入 JSON 校验与异步入队。
+func (h *Handler) notifyV2Secure(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if h.limiter != nil && !h.limiter.Allow() {
+		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
@@ -263,6 +311,17 @@ func (h *Handler) notifyV2(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "read body failed", http.StatusBadRequest)
 		return
 	}
+	if h.verifier != nil {
+		if err := h.verifier.VerifyRequest(r, body); err != nil {
+			h.logger.Warn("notify v2 security verification failed", "error", err)
+			http.Error(w, "security verification failed", http.StatusUnauthorized)
+			return
+		}
+	}
+	h.notifyV2Body(w, r, body)
+}
+
+func (h *Handler) notifyV2Body(w http.ResponseWriter, r *http.Request, body []byte) {
 	var req model.NotifyRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
@@ -274,7 +333,7 @@ func (h *Handler) notifyV2(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := h.notifySvc.Ingest(r.Context(), req, body)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		h.badGateway(w, r, err)
 		return
 	}
 	writeJSON(w, map[string]any{"event_db_id": id, "status": "queued"})

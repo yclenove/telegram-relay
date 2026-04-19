@@ -14,7 +14,7 @@ func (h *Handler) listDispatchJobs(w http.ResponseWriter, r *http.Request) {
 	status := r.URL.Query().Get("status")
 	items, total, err := h.store.ListDispatchJobs(r.Context(), status, limit, offset)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.serverError(w, r, err)
 		return
 	}
 	writeJSON(w, map[string]any{"items": jsonSlice(items), "total": total})

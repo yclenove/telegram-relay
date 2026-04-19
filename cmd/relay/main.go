@@ -60,7 +60,12 @@ func main() {
 		logger.Error("apply migrations failed", "error", err)
 		os.Exit(1)
 	}
-	if err := store.EnsureBootstrapData(context.Background(), cfg.Auth.BootstrapUsername, service.HashPassword(cfg.Auth.BootstrapPassword), cfg.Auth.BootstrapPasswordSync); err != nil {
+	bootstrapHash, err := service.HashPassword(cfg.Auth.BootstrapPassword)
+	if err != nil {
+		logger.Error("hash bootstrap password failed", "error", err)
+		os.Exit(1)
+	}
+	if err := store.EnsureBootstrapData(context.Background(), cfg.Auth.BootstrapUsername, bootstrapHash, cfg.Auth.BootstrapPasswordSync); err != nil {
 		logger.Error("bootstrap admin failed", "error", err)
 		os.Exit(1)
 	}
@@ -69,7 +74,7 @@ func main() {
 	}
 	notifySvc := service.NewNotifyService(store, cfg.Retry.MaxAttempts)
 	authSvc := service.NewAuthService(store, cfg.Auth)
-	worker := service.NewDispatchWorker(logger, store, cfg.Retry, cfg.Worker, cfg.Telegram.ParseMode)
+	worker := service.NewDispatchWorker(logger, store, cfg.Retry, cfg.Worker, cfg.Telegram)
 	verifier := security.NewVerifier(cfg.Security)
 	// 全局限流器：用于保护中转服务，防止上游突发请求把实例打挂。
 	limiter := rate.NewLimiter(rate.Limit(cfg.Security.RateLimitPerSecond), cfg.Security.RateLimitBurst)
@@ -77,7 +82,7 @@ func main() {
 	mux := http.NewServeMux()
 	relayHandler := relayhttp.NewHandler(logger, verifier, relayService, notifySvc, limiter)
 	relayHandler.Register(mux)
-	v2Handler := apiv2.NewHandler(logger, store, authSvc, notifySvc)
+	v2Handler := apiv2.NewHandler(logger, store, authSvc, notifySvc, verifier, limiter)
 	v2Handler.Register(mux)
 	// 仅当配置了静态目录且路径存在时挂载管理台，避免前端独立仓库后镜像内无文件导致异常。
 	if cfg.Web.AdminStaticDir != "" {

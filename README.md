@@ -17,9 +17,10 @@ Go 模块：`github.com/yclenove/telegram-relay`（与 GitHub 仓库名 **telegr
 
 - 公开接口
   - `POST /api/v1/notify`
-  - `POST /api/v2/notify`
+  - `POST /api/v2/notify`：与 v1 **相同**的入站安全模型（`Authorization: Bearer` + 按 `security.level` 的 `X-Timestamp` / `X-Signature` / IP 白名单）以及**同一套全局限流**；请勿将实例端口暴露给不可信网络而不经网关或防火墙保护。
 - 管理端接口
-  - `POST /api/v2/auth/login`
+  - `POST /api/v2/auth/login`：响应含 `access_token`、`refresh_token`（长期）、`permissions`
+  - `POST /api/v2/auth/refresh`：请求体 `{ "refresh_token": "<jwt>" }`，成功时返回新的 `access_token` 与 `refresh_token`（旋转刷新令牌）
   - `GET/POST /api/v2/bots`；`PATCH/DELETE /api/v2/bots/{id}`（需 `bot.manage`）
   - `GET/POST /api/v2/destinations`；`PATCH/DELETE /api/v2/destinations/{id}`（需 `bot.manage`）
   - `GET/POST /api/v2/rules`；`PATCH/DELETE /api/v2/rules/{id}`（需 `rule.manage`）
@@ -28,6 +29,11 @@ Go 模块：`github.com/yclenove/telegram-relay`（与 GitHub 仓库名 **telegr
   - `GET /api/v2/audits`：分页与筛选，响应 `{ items, total }`；查询参数含 `object_id`、`actor_user_id`、`created_after`/`created_before`（RFC3339）等（需 `audit.read`）
   - `GET /api/v2/dashboard`
   - `GET /api/v2/roles`；`GET /api/v2/roles/{id}/permissions`（只读权限码列表）；`GET/POST /api/v2/users`、`PATCH/DELETE /api/v2/users/{id}`（需 `user.manage` 或 `system.manage`）
+
+### 入队语义说明
+
+- **event_id**：v1 要求请求体必填 `event_id`；v2 若省略则由服务生成 `evt-<纳秒时间戳>` 作为幂等键。对接文档中请写明上游去重期望，避免混用导致语义不一致。
+- **机器人 Token 存储**：库字段 `bot_token_enc` 当前为 **Base64 编码**（非加密）。若需防备份/磁盘泄露，应规划 KMS 或应用层对称加密；详见 `internal/repository/postgres/store.go` 中 `EncryptSecret` 注释。
 
 ## 配置文件（公私分离）
 

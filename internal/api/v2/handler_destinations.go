@@ -42,10 +42,10 @@ func (h *Handler) patchDestination(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, postgres.ErrBotNotFound) {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, "bot not found", http.StatusBadRequest)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		h.badRequestLogged(w, r, "invalid request", err)
 		return
 	}
 	h.writeAuditFromRequest(r, "destination.update", "destination", idStr, req)
@@ -69,7 +69,7 @@ func (h *Handler) deleteDestination(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.serverError(w, r, err)
 		return
 	}
 	h.writeAuditFromRequest(r, "destination.delete", "destination", idStr, map[string]any{"id": id})

@@ -9,20 +9,44 @@ import (
 	"github.com/yclenove/telegram-relay/internal/config"
 )
 
-func TestHashPasswordStable(t *testing.T) {
+func TestHashPasswordIsBcrypt(t *testing.T) {
 	t.Parallel()
-	a := HashPassword("abc123")
-	b := HashPassword("abc123")
-	if a != b {
-		t.Fatalf("expected stable hash")
+	a, err := HashPassword("abc123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := HashPassword("abc123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a == b {
+		t.Fatal("bcrypt hashes should differ across salts")
+	}
+	if !VerifyPassword(a, "abc123") || !VerifyPassword(b, "abc123") {
+		t.Fatal("bcrypt verify failed")
+	}
+	if VerifyPassword(a, "wrong") {
+		t.Fatal("bcrypt should reject wrong password")
+	}
+}
+
+func TestVerifyLegacySHA256Hex(t *testing.T) {
+	t.Parallel()
+	legacy := hashSHA256Legacy("old-secret")
+	if !VerifyPassword(legacy, "old-secret") {
+		t.Fatal("legacy sha256 verify failed")
+	}
+	if VerifyPassword(legacy, "nope") {
+		t.Fatal("legacy should reject wrong password")
 	}
 }
 
 func TestParseToken(t *testing.T) {
 	t.Parallel()
-	svc := NewAuthService(nil, config.AuthConfig{JWTSecret: "unit-secret", AccessTokenTTLMin: 60})
+	svc := NewAuthService(nil, config.AuthConfig{JWTSecret: "unit-secret", AccessTokenTTLMin: 60, RefreshTokenTTLMin: 1440})
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"uid":   int64(7),
+		"typ":   jwtTypAccess,
+		"uid":   float64(7),
 		"perms": []string{"bot.manage", "rule.manage"},
 		"exp":   time.Now().Add(time.Minute).Unix(),
 	})
@@ -39,5 +63,23 @@ func TestParseToken(t *testing.T) {
 	}
 	if !perms["bot.manage"] || !perms["rule.manage"] {
 		t.Fatalf("permissions should be present")
+	}
+}
+
+func TestParseTokenRejectsRefreshJWT(t *testing.T) {
+	t.Parallel()
+	svc := NewAuthService(nil, config.AuthConfig{JWTSecret: "unit-secret", AccessTokenTTLMin: 60, RefreshTokenTTLMin: 1440})
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"typ": jwtTypRefresh,
+		"uid": float64(1),
+		"exp": time.Now().Add(time.Hour).Unix(),
+	})
+	raw, err := token.SignedString([]byte("unit-secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = svc.ParseToken(raw)
+	if err == nil {
+		t.Fatal("expected refresh token rejected by ParseToken")
 	}
 }

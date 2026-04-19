@@ -46,7 +46,7 @@ func (h *Handler) patchBot(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "duplicate name", http.StatusConflict)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		h.badRequestLogged(w, r, "invalid request", err)
 		return
 	}
 	out.BotTokenEnc = ""
@@ -71,7 +71,7 @@ func (h *Handler) deleteBot(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.serverError(w, r, err)
 		return
 	}
 	h.writeAuditFromRequest(r, "bot.delete", "bot", idStr, map[string]any{"id": id})
@@ -119,7 +119,7 @@ func (h *Handler) patchRule(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, postgres.ErrDestinationNotFound) {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, "destination not found", http.StatusBadRequest)
 			return
 		}
 		var pe *pgconn.PgError
@@ -127,7 +127,7 @@ func (h *Handler) patchRule(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "duplicate name", http.StatusConflict)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		h.badRequestLogged(w, r, "invalid request", err)
 		return
 	}
 	h.writeAuditFromRequest(r, "rule.update", "rule", idStr, req)
@@ -151,7 +151,7 @@ func (h *Handler) deleteRule(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.serverError(w, r, err)
 		return
 	}
 	h.writeAuditFromRequest(r, "rule.delete", "rule", idStr, map[string]any{"id": id})

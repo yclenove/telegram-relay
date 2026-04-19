@@ -141,6 +141,8 @@ func (s *Store) EnsureBootstrapData(ctx context.Context, username, passwordHash 
 	return tx.Commit(ctx)
 }
 
+// EncryptSecret 对敏感串做 **Base64 编码**（非加密），仅避免明文直接落库与日志误扫。
+// 生产若需防 DBA/备份泄露，应改为 KMS 或应用层对称加密（AES-GCM）并单独管理密钥。
 func EncryptSecret(raw string) string {
 	return base64.StdEncoding.EncodeToString([]byte(raw))
 }
@@ -688,6 +690,47 @@ WHERE ur.user_id=$1
 		perms = append(perms, p)
 	}
 	return u, perms, nil
+}
+
+// FindUserWithPermissionsByID 按用户主键加载账号与权限码（用于 refresh 时重算权限，避免 JWT 长期陈旧）。
+func (s *Store) FindUserWithPermissionsByID(ctx context.Context, userID int64) (domain.User, []string, error) {
+	var u domain.User
+	err := s.pool.QueryRow(ctx, "SELECT id,username,password_hash,is_enabled,created_at,updated_at FROM users WHERE id=$1", userID).
+		Scan(&u.ID, &u.Username, &u.PasswordHash, &u.IsEnabled, &u.CreatedAt, &u.UpdatedAt)
+	if err != nil {
+		return domain.User{}, nil, err
+	}
+	rows, err := s.pool.Query(ctx, `
+SELECT rp.permission_code
+FROM user_roles ur
+JOIN role_permissions rp ON rp.role_id=ur.role_id
+WHERE ur.user_id=$1
+`, u.ID)
+	if err != nil {
+		return domain.User{}, nil, err
+	}
+	defer rows.Close()
+	var perms []string
+	for rows.Next() {
+		var p string
+		if err := rows.Scan(&p); err != nil {
+			return domain.User{}, nil, err
+		}
+		perms = append(perms, p)
+	}
+	return u, perms, nil
+}
+
+// UpdateUserPasswordHash 仅更新密码哈希（登录后从旧 SHA256 迁移到 bcrypt 时使用）。
+func (s *Store) UpdateUserPasswordHash(ctx context.Context, userID int64, passwordHash string) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE users SET password_hash=$2, updated_at=NOW() WHERE id=$1`, userID, passwordHash)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
 }
 
 func (s *Store) WriteAudit(ctx context.Context, actorUserID *int64, action, objectType, objectID, detailJSON string) error {

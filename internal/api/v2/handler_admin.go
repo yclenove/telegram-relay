@@ -19,7 +19,7 @@ func (h *Handler) listRoles(w http.ResponseWriter, r *http.Request) {
 	}
 	list, err := h.store.ListRoles(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.serverError(w, r, err)
 		return
 	}
 	writeJSON(w, jsonSlice(list))
@@ -43,7 +43,7 @@ func (h *Handler) listRolePermissions(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.serverError(w, r, err)
 		return
 	}
 	writeJSON(w, map[string]any{"role_id": rid, "permissions": jsonSlice(codes)})
@@ -56,7 +56,7 @@ func (h *Handler) listUsers(w http.ResponseWriter, r *http.Request) {
 	}
 	list, err := h.store.ListUserSummaries(r.Context())
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.serverError(w, r, err)
 		return
 	}
 	writeJSON(w, jsonSlice(list))
@@ -90,17 +90,21 @@ func (h *Handler) createUser(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "username already exists", http.StatusConflict)
 		return
 	} else if !errors.Is(err, pgx.ErrNoRows) {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.serverError(w, r, err)
 		return
 	}
 	if err := h.store.ValidateRoleIDsExist(r.Context(), req.RoleIDs); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		h.badRequestLogged(w, r, "invalid role ids", err)
 		return
 	}
-	hash := service.HashPassword(req.Password)
+	hash, err := service.HashPassword(req.Password)
+	if err != nil {
+		h.serverError(w, r, err)
+		return
+	}
 	out, err := h.store.CreateUserWithRoles(r.Context(), req.Username, hash, enabled, req.RoleIDs)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		h.badRequestLogged(w, r, "invalid request", err)
 		return
 	}
 	h.writeAuditFromRequest(r, "user.create", "user", strconv.FormatInt(out.ID, 10), req)
@@ -123,7 +127,7 @@ func (h *Handler) patchUser(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "user not found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.serverError(w, r, err)
 		return
 	}
 	var req struct {
@@ -137,18 +141,26 @@ func (h *Handler) patchUser(w http.ResponseWriter, r *http.Request) {
 	}
 	var pwdHash *string
 	if strings.TrimSpace(req.Password) != "" {
-		ph := service.HashPassword(req.Password)
+		ph, herr := service.HashPassword(req.Password)
+		if herr != nil {
+			h.serverError(w, r, herr)
+			return
+		}
 		pwdHash = &ph
 	}
 	if req.RoleIDs != nil {
 		if err := h.store.ValidateRoleIDsExist(r.Context(), *req.RoleIDs); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			h.badRequestLogged(w, r, "invalid role ids", err)
 			return
 		}
 	}
 	out, err := h.store.UpdateUserPatch(r.Context(), uid, req.IsEnabled, pwdHash, req.RoleIDs)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		if strings.Contains(err.Error(), "最后一个超级管理员") {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		h.badRequestLogged(w, r, "invalid request", err)
 		return
 	}
 	h.writeAuditFromRequest(r, "user.update", "user", strconv.FormatInt(uid, 10), req)
@@ -171,7 +183,7 @@ func (h *Handler) deleteUser(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		h.serverError(w, r, err)
 		return
 	}
 	h.writeAuditFromRequest(r, "user.delete", "user", idStr, map[string]any{"id": uid})
