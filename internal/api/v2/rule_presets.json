@@ -1,0 +1,119 @@
+[
+  {
+    "code": "app_panic",
+    "title": "程序异常 / Panic",
+    "description": "未捕获异常、panic 栈，建议单独群或高优先级 Topic。",
+    "suggested_level": "critical",
+    "suggested_source": "app-runtime",
+    "example_labels": "{\"component\":\"api\",\"env\":\"prod\"}",
+    "routing_hint": "将 match_source 设为与进程上报的 source 一致，如 app-runtime。"
+  },
+  {
+    "code": "app_warning",
+    "title": "应用警告",
+    "description": "可恢复错误、降级、重试告警等。",
+    "suggested_level": "warning",
+    "suggested_source": "app-service",
+    "example_labels": "{\"severity\":\"warn\"}",
+    "routing_hint": "按服务名拆分 source，例如 order-service、payment-service。"
+  },
+  {
+    "code": "infra_error",
+    "title": "基础设施报错",
+    "description": "K8s 事件、节点 NotReady、磁盘满等。",
+    "suggested_level": "error",
+    "suggested_source": "k8s-cluster",
+    "example_labels": "{\"cluster\":\"prod-1\"}",
+    "routing_hint": "source 与集群名或命名空间对齐，便于多集群路由。"
+  },
+  {
+    "code": "business_notice",
+    "title": "业务提醒",
+    "description": "订单状态、审核待办等非紧急通知。",
+    "suggested_level": "info",
+    "suggested_source": "biz-notify",
+    "example_labels": "{\"biz\":\"order\"}",
+    "routing_hint": "用 labels 区分业务域，规则 match_labels 精确匹配。"
+  },
+  {
+    "code": "payment_order",
+    "title": "支付与订单",
+    "description": "支付回调、对账、风控命中。",
+    "suggested_level": "warning",
+    "suggested_source": "payment-gateway",
+    "example_labels": "{\"channel\":\"wechat\"}",
+    "routing_hint": "source 固定为支付网关服务名，level 区分成功/失败。"
+  },
+  {
+    "code": "deploy_release",
+    "title": "部署与发布",
+    "description": "CI/CD 发布成功/失败、回滚。",
+    "suggested_level": "info",
+    "suggested_source": "cicd",
+    "example_labels": "{\"pipeline\":\"deploy\"}",
+    "routing_hint": "可与 GitLab/Jenkins 的 project 名作为 source 前缀。"
+  },
+  {
+    "code": "cert_expiry",
+    "title": "证书与域名到期",
+    "description": "TLS 证书、域名续费提醒。",
+    "suggested_level": "warning",
+    "suggested_source": "cert-monitor",
+    "example_labels": "{\"domain\":\"example.com\"}",
+    "routing_hint": "labels 带 domain，规则按域名拆送到不同负责人群。"
+  },
+  {
+    "code": "db_slow",
+    "title": "数据库与慢查询",
+    "description": "慢 SQL、连接池告警、主从延迟。",
+    "suggested_level": "warning",
+    "suggested_source": "postgres-monitor",
+    "example_labels": "{\"db\":\"main\"}",
+    "routing_hint": "source 与实例别名一致，便于 DBA 分流。"
+  },
+  {
+    "code": "security_audit",
+    "title": "安全与审计",
+    "description": "异常登录、敏感操作、合规审计。",
+    "suggested_level": "critical",
+    "suggested_source": "security-siem",
+    "example_labels": "{\"tenant\":\"acme\"}",
+    "routing_hint": "建议使用独立目标与高优先级规则。"
+  },
+  {
+    "code": "prometheus",
+    "title": "Prometheus / Alertmanager",
+    "description": "指标告警、Recording/Alerting 规则触发。",
+    "suggested_level": "warning",
+    "suggested_source": "prometheus",
+    "example_labels": "{\"alertname\":\"HighErrorRate\"}",
+    "routing_hint": "Alertmanager 的 source 常固定为 prometheus，用 labels.alertname 区分。"
+  },
+  {
+    "code": "zabbix",
+    "title": "Zabbix",
+    "description": "主机、触发器、自动发现事件。",
+    "suggested_level": "warning",
+    "suggested_source": "zabbix",
+    "example_labels": "{\"host\":\"web-01\"}",
+    "routing_hint": "将 Zabbix 宏映射到 labels 便于 match_labels。"
+  },
+  {
+    "code": "cron_job_fail",
+    "title": "定时任务失败",
+    "description": "Cron、K8s CronJob、计划任务退出非 0。",
+    "suggested_level": "error",
+    "suggested_source": "cron",
+    "example_labels": "{\"job\":\"backup\"}",
+    "routing_hint": "job 名写入 labels.job，规则按 job 路由。"
+  },
+  {
+    "code": "api_gateway_5xx",
+    "title": "API 网关 4xx/5xx",
+    "description": "Nginx、Envoy、APISIX 等网关错误率。",
+    "suggested_level": "error",
+    "suggested_source": "api-gateway",
+    "example_labels": "{\"route\":\"/v1/orders\"}",
+    "routing_hint": "source 用网关集群名，labels 带 route 或 upstream。"
+  }
+]

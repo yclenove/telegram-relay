@@ -97,12 +97,17 @@ func (v *Verifier) verifyTimestamp(r *http.Request) (int64, error) {
 // verifySignature 校验签名：
 // sign = hex(HMAC_SHA256(secret, "<timestamp>.<rawBody>"))
 func (v *Verifier) verifySignature(r *http.Request, body []byte, timestamp int64) error {
+	return verifySignatureWithSecret(r, body, timestamp, v.hmacSecret)
+}
+
+// verifySignatureWithSecret 供 CompositeVerifier 在命中数据库凭证时使用独立 HMAC 密钥。
+func verifySignatureWithSecret(r *http.Request, body []byte, timestamp int64, hmacSecret string) error {
 	signature := strings.TrimSpace(r.Header.Get("X-Signature"))
 	if signature == "" {
 		return errors.New("missing X-Signature header")
 	}
 	payload := fmt.Sprintf("%d.%s", timestamp, string(body))
-	mac := hmac.New(sha256.New, []byte(v.hmacSecret))
+	mac := hmac.New(sha256.New, []byte(hmacSecret))
 	_, _ = mac.Write([]byte(payload))
 	expected := hex.EncodeToString(mac.Sum(nil))
 	if subtle.ConstantTimeCompare([]byte(strings.ToLower(signature)), []byte(expected)) != 1 {

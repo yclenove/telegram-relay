@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/yclenove/telegram-relay/internal/config"
 	"github.com/yclenove/telegram-relay/internal/domain"
 	"github.com/yclenove/telegram-relay/internal/model"
 )
@@ -41,8 +42,15 @@ type AuditLogView struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
-func NewStore(ctx context.Context, dsn string) (*Store, error) {
-	pool, err := pgxpool.New(ctx, dsn)
+func NewStore(ctx context.Context, db config.DatabaseConfig) (*Store, error) {
+	pc, err := pgxpool.ParseConfig(db.DSN)
+	if err != nil {
+		return nil, fmt.Errorf("parse database dsn: %w", err)
+	}
+	if sp := strings.TrimSpace(db.Schema); sp != "" {
+		pc.ConnConfig.RuntimeParams["search_path"] = sp + ", public"
+	}
+	pool, err := pgxpool.NewWithConfig(ctx, pc)
 	if err != nil {
 		return nil, fmt.Errorf("create pg pool failed: %w", err)
 	}
@@ -56,6 +64,23 @@ func (s *Store) Close() { s.pool.Close() }
 
 // ApplyMigrations 启动时按文件名顺序执行 SQL 迁移。
 func (s *Store) ApplyMigrations(ctx context.Context, dir string) error {
+	// 空库上 001_init.sql 尚未执行，若先 SELECT schema_migrations 会报 relation 不存在。
+	// 与 001_init.sql 中 DDL 一致，IF NOT EXISTS 与后续迁移文件中的定义可安全共存。
+	if _, err := s.pool.Exec(ctx, `
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version TEXT PRIMARY KEY,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+)`); err != nil {
+		msg := err.Error()
+		hint := ""
+		if strings.Contains(msg, "42501") || strings.Contains(msg, "permission denied for schema public") {
+			hint = "：PostgreSQL 当前用户对 public 无 CREATE。请任选其一：" +
+				"(1) 超级用户在目标库执行 GRANT USAGE, CREATE ON SCHEMA public TO 你的数据库用户；" +
+				"(2) 或由库管创建专用模式并授权后，设置环境变量 PG_SCHEMA=模式名（应用将把表建在该模式下）。"
+		}
+		return fmt.Errorf("ensure schema_migrations table: %w%s", err, hint)
+	}
+
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return fmt.Errorf("read migrations dir failed: %w", err)
@@ -120,7 +145,7 @@ func (s *Store) EnsureBootstrapData(ctx context.Context, username, passwordHash 
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
-	perms := []string{"bot.manage", "rule.manage", "event.read", "audit.read", "system.manage", "user.manage"}
+	perms := []string{"bot.manage", "rule.manage", "event.read", "audit.read", "system.manage", "user.manage", "ingest_credential.manage"}
 	for _, p := range perms {
 		_, _ = tx.Exec(ctx, "INSERT INTO role_permissions(role_id, permission_code) VALUES($1,$2) ON CONFLICT DO NOTHING", roleID, p)
 	}
@@ -155,8 +180,8 @@ func DecryptSecret(enc string) string {
 	return string(out)
 }
 
-// CreateEventAndJob 将入站请求写入 events + dispatch_jobs。
-func (s *Store) CreateEventAndJob(ctx context.Context, req model.NotifyRequest, rawBody string, destinationID int64, maxAttempts int) (int64, error) {
+// CreateEventAndJob 将入站请求写入 events + dispatch_jobs；ingestCredentialID 可为 nil（全局 AUTH 入队）。
+func (s *Store) CreateEventAndJob(ctx context.Context, req model.NotifyRequest, rawBody string, destinationID int64, maxAttempts int, ingestCredentialID *int64) (int64, error) {
 	labels, _ := json.Marshal(req.Labels)
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -165,11 +190,11 @@ func (s *Store) CreateEventAndJob(ctx context.Context, req model.NotifyRequest, 
 	defer tx.Rollback(ctx)
 	var eventDBID int64
 	err = tx.QueryRow(ctx, `
-INSERT INTO events(event_id, source, level, title, message, labels, raw_body, status)
-VALUES($1,$2,$3,$4,$5,$6,$7,'pending')
+INSERT INTO events(event_id, source, level, title, message, labels, raw_body, status, ingest_credential_id)
+VALUES($1,$2,$3,$4,$5,$6,$7,'pending',$8)
 ON CONFLICT(event_id) DO UPDATE SET updated_at=NOW()
 RETURNING id
-`, req.EventID, req.Source, req.Level, req.Title, req.Message, string(labels), rawBody).Scan(&eventDBID)
+`, req.EventID, req.Source, req.Level, req.Title, req.Message, string(labels), rawBody, ingestCredentialID).Scan(&eventDBID)
 	if err != nil {
 		return 0, err
 	}

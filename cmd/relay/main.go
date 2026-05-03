@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"os/signal"
 	"syscall"
@@ -28,6 +29,17 @@ import (
 // 2) 组装依赖
 // 3) 启动 HTTP 服务
 // 4) 处理优雅停机
+// adminStaticNoStoreIndex 为入口 HTML 关闭强缓存，便于更新子路径 base 后客户端立即拿到新 index。
+func adminStaticNoStoreIndex(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := path.Clean("/" + r.URL.Path)
+		if p == "/" || path.Base(p) == "index.html" {
+			w.Header().Set("Cache-Control", "no-store, must-revalidate")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func main() {
 	// 使用 JSON 日志，便于后续接入 Loki/ELK 或通过 grep 分析字段。
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -54,7 +66,7 @@ func main() {
 		os.Exit(1)
 	}
 	relayService := relay.NewService(telegramClient, cfg.Retry)
-	store, err := postgres.NewStore(context.Background(), cfg.Database.DSN)
+	store, err := postgres.NewStore(context.Background(), cfg.Database)
 	if err != nil {
 		logger.Error("init postgres failed", "error", err)
 		os.Exit(1)
@@ -79,19 +91,23 @@ func main() {
 	notifySvc := service.NewNotifyService(store, cfg.Retry.MaxAttempts)
 	authSvc := service.NewAuthService(store, cfg.Auth)
 	worker := service.NewDispatchWorker(logger, store, cfg.Retry, cfg.Worker, cfg.Telegram)
-	verifier := security.NewVerifier(cfg.Security)
+	verifier := security.NewCompositeVerifier(cfg.Security, store)
 	// 全局限流器：用于保护中转服务，防止上游突发请求把实例打挂。
 	limiter := rate.NewLimiter(rate.Limit(cfg.Security.RateLimitPerSecond), cfg.Security.RateLimitBurst)
 
 	mux := http.NewServeMux()
 	relayHandler := relayhttp.NewHandler(logger, verifier, relayService, notifySvc, limiter)
 	relayHandler.Register(mux)
-	v2Handler := apiv2.NewHandler(logger, store, authSvc, notifySvc, verifier, limiter)
+	v2Handler := apiv2.NewHandler(logger, store, authSvc, notifySvc, verifier, limiter, apiv2.IntegrationHints{
+		PublicBaseURL: cfg.Web.PublicBaseURL,
+		SecurityLevel: cfg.Security.Level,
+	})
 	v2Handler.Register(mux)
 	// 仅当配置了静态目录且路径存在时挂载管理台，避免前端独立仓库后镜像内无文件导致异常。
 	if cfg.Web.AdminStaticDir != "" {
 		if _, err := os.Stat(cfg.Web.AdminStaticDir); err == nil {
-			mux.Handle("/", http.FileServer(http.Dir(cfg.Web.AdminStaticDir)))
+			// 避免同域部署升级后浏览器长期 304 缓存旧 index.html（仍引用根路径 /assets 导致白屏）。
+			mux.Handle("/", adminStaticNoStoreIndex(http.FileServer(http.Dir(cfg.Web.AdminStaticDir))))
 			logger.Info("admin static mounted", "dir", cfg.Web.AdminStaticDir)
 		} else {
 			logger.Warn("admin static dir missing, skip file server", "dir", cfg.Web.AdminStaticDir, "error", err)

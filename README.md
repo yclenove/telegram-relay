@@ -10,26 +10,30 @@ Go 模块：`github.com/yclenove/telegram-relay`（与 GitHub 仓库名 **telegr
 - 多机器人管理：机器人、目标 destination、路由规则
 - 异步发送：事件入库后由 worker 轮询 `dispatch_jobs` 分发
 - 权限系统：登录鉴权 + RBAC 权限检查 + 审计日志
-- 可视化后台：独立仓库 **telegram-relay-admin**（构建 `dist` 后由 `ADMIN_STATIC_DIR` 挂载），调用 `/api/v2/*` 管理 API
+- 可视化后台：独立仓库 **telegram-relay-admin**（构建 **`admin-dist`** 后由 `ADMIN_STATIC_DIR` 挂载），调用 `/api/v2/*` 管理 API
 - 管理台能力清单与阶段完成情况见 [`docs/admin-console-plan.md`](docs/admin-console-plan.md)
 
 ## 文档
 
 - [快速功能指引](docs/user-quick-guide.md)：首次部署、管理台配置顺序、常见问题
 - [使用手册](docs/user-manual.md)：概念说明、RBAC、外部 HTTP 接入（v1/v2、鉴权、反代注意）、运维链接
-- [第三方接入说明](docs/third-party-integration.md)：对接步骤、请求示例、错误码；**说明当前为全局单 Token / 单 HMAC，尚无按接入方独立密钥**
+- [Linux 傻瓜部署](docs/deploy-linux-simple.md)：线上 Linux 二进制 + PostgreSQL + systemd + 可选 Nginx/管理台
+- [宝塔傻瓜部署](docs/deploy-baota-simple.md)：已装宝塔时 PostgreSQL、Supervisor、网站反代、SSL 一条龙
+- [第三方接入说明](docs/third-party-integration.md)：对接步骤、请求示例、错误码；支持**全局 Token/HMAC** 与可选的**多接入方入站凭证**（`key_id.secret` + 每凭证独立 HMAC）并存
 
 ## 主要接口
 
 - 公开接口
   - `POST /api/v1/notify`
-  - `POST /api/v2/notify`：与 v1 **相同**的入站安全模型（`Authorization: Bearer` + 按 `security.level` 的 `X-Timestamp` / `X-Signature` / IP 白名单）以及**同一套全局限流**；请勿将实例端口暴露给不可信网络而不经网关或防火墙保护。
+  - `POST /api/v2/notify`：与 v1 **相同**的入站安全模型（`Authorization: Bearer` + 按 `security.level` 的 `X-Timestamp` / `X-Signature` / IP 白名单）以及**同一套全局限流**；Bearer 可为全局 `AUTH_TOKEN`，或管理台签发的 **`key_id.secret`**（见 `docs/third-party-integration.md`）。请勿将实例端口暴露给不可信网络而不经网关或防火墙保护。
 - 管理端接口
   - `POST /api/v2/auth/login`：响应含 `access_token`、`refresh_token`（长期）、`permissions`
   - `POST /api/v2/auth/refresh`：请求体 `{ "refresh_token": "<jwt>" }`，成功时返回新的 `access_token` 与 `refresh_token`（旋转刷新令牌）
   - `GET/POST /api/v2/bots`；`PATCH/DELETE /api/v2/bots/{id}`（需 `bot.manage`）
   - `GET/POST /api/v2/destinations`；`PATCH/DELETE /api/v2/destinations/{id}`（需 `bot.manage`）
   - `GET/POST /api/v2/rules`；`PATCH/DELETE /api/v2/rules/{id}`（需 `rule.manage`）
+  - `GET /api/v2/rule-presets`：内置路由场景模板 JSON（需 `rule.manage` 或 `bot.manage`）
+  - `GET/POST /api/v2/ingest-credentials`；`PATCH /api/v2/ingest-credentials/{id}`；`POST /api/v2/ingest-credentials/{id}/rotate`（需 `ingest_credential.manage`；创建/轮换响应中含一次性明文 `plain_token`、`plain_hmac_secret`）
   - `GET /api/v2/events`：分页与筛选，响应 `{ items, total }`；`GET /api/v2/events/{id}` 单条详情（需 `event.read`）
   - `GET /api/v2/dispatch-jobs`：发送任务分页列表，响应 `{ items, total }`；查询参数 `limit`、`offset`、`status`（需 `event.read`）
   - `GET /api/v2/audits`：分页与筛选，响应 `{ items, total }`；查询参数含 `object_id`、`actor_user_id`、`created_after`/`created_before`（RFC3339）等（需 `audit.read`）
@@ -89,7 +93,7 @@ npm install
 npm run dev
 ```
 
-构建产物 `dist/` 通过环境变量 `ADMIN_STATIC_DIR` 指向该目录，由后端托管静态文件（若未配置则仅 API）。
+构建产物 **`admin-dist/`** 通过环境变量 `ADMIN_STATIC_DIR` 指向该目录，由后端托管静态文件（若未配置则仅 API）。
 
 ## Docker 启动
 

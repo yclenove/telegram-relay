@@ -9,3 +9,7 @@ configs/config.private.yaml
 secrets/
 configs/private/config.local.yaml
 configs/private/*.secret.yaml
+
+# 本地构建与打包输出（由 go build / pack-deploy-bundle 生成）
+build/
+release/

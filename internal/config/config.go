@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -68,6 +69,9 @@ type RetryConfig struct {
 // DatabaseConfig 描述 PostgreSQL 连接参数。
 type DatabaseConfig struct {
 	DSN string `yaml:"dsn"`
+	// Schema 非空时，连接层设置 search_path 为该模式优先（其后为 public），DDL/查询落在该模式下。
+	// 用于 PG15+ 或云库收回 public 上 CREATE 权限时，由库管预先建好并授权给应用用户的专用模式（环境变量 PG_SCHEMA）。
+	Schema string `yaml:"schema"`
 }
 
 // AuthConfig 描述管理端认证与 Token 配置。
@@ -91,6 +95,8 @@ type WorkerConfig struct {
 // WebConfig 描述前端静态资源路径与控制参数。
 type WebConfig struct {
 	AdminStaticDir string `yaml:"admin_static_dir"`
+	// PublicBaseURL 对外 HTTPS 根地址（无尾斜杠），用于管理端生成第三方接入文档中的 notify URL；留空则仅依赖管理台传入的 base_url。
+	PublicBaseURL string `yaml:"public_base_url"`
 }
 
 // Load 加载配置：
@@ -122,6 +128,9 @@ func Load() (Config, error) {
 	overrideFromEnv(&cfg)
 	// 与 MCP 等工具共用 PG_* 分项时，避免重复维护一整条 DATABASE_DSN。
 	applyDatabaseDSNFromPGEnv(&cfg)
+	if err := validateDatabaseSchema(cfg.Database.Schema); err != nil {
+		return cfg, err
+	}
 	if err := validate(cfg); err != nil {
 		return cfg, err
 	}
@@ -229,6 +238,7 @@ func overrideFromEnv(cfg *Config) {
 	setInt("RETRY_MAX_BACKOFF_MS", &cfg.Retry.MaxBackoffMS)
 
 	setString("DATABASE_DSN", &cfg.Database.DSN)
+	setString("PG_SCHEMA", &cfg.Database.Schema)
 	setString("JWT_SECRET", &cfg.Auth.JWTSecret)
 	setInt("ACCESS_TOKEN_TTL_MIN", &cfg.Auth.AccessTokenTTLMin)
 	setInt("REFRESH_TOKEN_TTL_MIN", &cfg.Auth.RefreshTokenTTLMin)
@@ -240,6 +250,20 @@ func overrideFromEnv(cfg *Config) {
 	setInt("WORKER_POLL_INTERVAL_MS", &cfg.Worker.PollIntervalMS)
 	setInt("WORKER_BATCH_SIZE", &cfg.Worker.BatchSize)
 	setString("ADMIN_STATIC_DIR", &cfg.Web.AdminStaticDir)
+	setString("PUBLIC_BASE_URL", &cfg.Web.PublicBaseURL)
+}
+
+var databaseSchemaIdent = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
+
+func validateDatabaseSchema(schema string) error {
+	s := strings.TrimSpace(schema)
+	if s == "" {
+		return nil
+	}
+	if !databaseSchemaIdent.MatchString(s) {
+		return fmt.Errorf("invalid PG_SCHEMA / database.schema %q: use letters, digits, underscore; must start with letter or underscore", s)
+	}
+	return nil
 }
 
 // applyDatabaseDSNFromPGEnv 在未设置 DATABASE_DSN 时，用 PG_HOST/PG_USER/PG_PASSWORD 等拼出 libpq 风格连接串。

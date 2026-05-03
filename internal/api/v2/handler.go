@@ -3,6 +3,7 @@ package v2
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -10,6 +11,8 @@ import (
 	"strings"
 
 	"golang.org/x/time/rate"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/yclenove/telegram-relay/internal/model"
 	"github.com/yclenove/telegram-relay/internal/repository/postgres"
@@ -25,7 +28,7 @@ const (
 
 // notifyIngester 由异步入队服务实现；测试可注入桩，避免依赖真实数据库。
 type notifyIngester interface {
-	Ingest(ctx context.Context, req model.NotifyRequest, rawBody []byte) (int64, error)
+	Ingest(ctx context.Context, req model.NotifyRequest, rawBody []byte, ingestCredentialID *int64) (int64, error)
 }
 
 // Handler 提供 v2 管理 API。
@@ -34,12 +37,14 @@ type Handler struct {
 	store     *postgres.Store
 	authSvc   *service.AuthService
 	notifySvc notifyIngester
-	verifier  *security.Verifier
+	verifier  *security.CompositeVerifier
 	limiter   *rate.Limiter
+	hints     IntegrationHints
 }
 
 // NewHandler 组装 v2 处理器；verifier 与 limiter 用于 /api/v2/notify，与 v1 入站安全模型对齐。
-func NewHandler(logger *slog.Logger, store *postgres.Store, authSvc *service.AuthService, notifySvc notifyIngester, verifier *security.Verifier, limiter *rate.Limiter) *Handler {
+// hints 用于接入文档与 PUBLIC_BASE_URL 提示；可传零值。
+func NewHandler(logger *slog.Logger, store *postgres.Store, authSvc *service.AuthService, notifySvc notifyIngester, verifier *security.CompositeVerifier, limiter *rate.Limiter, hints IntegrationHints) *Handler {
 	return &Handler{
 		logger:    logger,
 		store:     store,
@@ -47,6 +52,7 @@ func NewHandler(logger *slog.Logger, store *postgres.Store, authSvc *service.Aut
 		notifySvc: notifySvc,
 		verifier:  verifier,
 		limiter:   limiter,
+		hints:     hints,
 	}
 }
 
@@ -78,6 +84,12 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("POST /api/v2/users", h.withAuth("user.manage", http.HandlerFunc(h.createUser)))
 	mux.Handle("PATCH /api/v2/users/{id}", h.withAuth("user.manage", http.HandlerFunc(h.patchUser)))
 	mux.Handle("DELETE /api/v2/users/{id}", h.withAuth("user.manage", http.HandlerFunc(h.deleteUser)))
+	mux.Handle("/api/v2/ingest-credentials", h.withAuth("ingest_credential.manage", http.HandlerFunc(h.ingestCredentials)))
+	mux.Handle("PATCH /api/v2/ingest-credentials/{id}", h.withAuth("ingest_credential.manage", http.HandlerFunc(h.patchIngestCredential)))
+	mux.Handle("POST /api/v2/ingest-credentials/{id}/rotate", h.withAuth("ingest_credential.manage", http.HandlerFunc(h.rotateIngestCredential)))
+	mux.Handle("GET /api/v2/rule-presets", h.withAuthAny([]string{"rule.manage", "bot.manage"}, http.HandlerFunc(h.rulePresets)))
+	mux.Handle("GET /api/v2/integration-hints", h.withAuth("ingest_credential.manage", http.HandlerFunc(h.integrationHints)))
+	mux.Handle("POST /api/v2/ingest-credentials/integration-doc", h.withAuth("ingest_credential.manage", http.HandlerFunc(h.renderIntegrationDoc)))
 }
 
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
@@ -226,6 +238,17 @@ func (h *Handler) rules(w http.ResponseWriter, r *http.Request) {
 		}
 		item, err := h.store.CreateRule(r.Context(), req.Name, req.Priority, req.MatchSource, req.MatchLevel, ml, req.DestinationID)
 		if err != nil {
+			var pe *pgconn.PgError
+			if errors.As(err, &pe) {
+				switch pe.Code {
+				case "23505": // routing_rules.name UNIQUE
+					http.Error(w, "rule name already exists", http.StatusConflict)
+					return
+				case "23503": // destination_id FK
+					http.Error(w, "destination not found", http.StatusBadRequest)
+					return
+				}
+			}
 			h.badRequestLogged(w, r, "invalid request", err)
 			return
 		}
@@ -314,11 +337,13 @@ func (h *Handler) notifyV2Secure(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.verifier != nil {
-		if err := h.verifier.VerifyRequest(r, body); err != nil {
+		nr, err := h.verifier.VerifyRequest(r, body)
+		if err != nil {
 			h.logger.Warn("notify v2 security verification failed", "error", err)
 			http.Error(w, "security verification failed", http.StatusUnauthorized)
 			return
 		}
+		r = nr
 	}
 	h.notifyV2Body(w, r, body)
 }
@@ -329,12 +354,21 @@ func (h *Handler) notifyV2Body(w http.ResponseWriter, r *http.Request, body []by
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
 	}
-	if strings.TrimSpace(req.Title) == "" || strings.TrimSpace(req.Source) == "" || strings.TrimSpace(req.Message) == "" {
+	if strings.TrimSpace(req.Title) == "" || strings.TrimSpace(req.Message) == "" {
 		http.Error(w, "missing required fields", http.StatusBadRequest)
 		return
 	}
-	id, err := h.notifySvc.Ingest(r.Context(), req, body)
+	credID, _ := security.IngestCredentialIDFromContext(r.Context())
+	if strings.TrimSpace(req.Source) == "" && credID == nil {
+		http.Error(w, "missing required fields", http.StatusBadRequest)
+		return
+	}
+	id, err := h.notifySvc.Ingest(r.Context(), req, body, credID)
 	if err != nil {
+		if errors.Is(err, service.ErrNoDestination) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		h.badGateway(w, r, err)
 		return
 	}
@@ -360,8 +394,12 @@ func (h *Handler) notifyTest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing required fields", http.StatusBadRequest)
 		return
 	}
-	id, err := h.notifySvc.Ingest(r.Context(), req, body)
+	id, err := h.notifySvc.Ingest(r.Context(), req, body, nil)
 	if err != nil {
+		if errors.Is(err, service.ErrNoDestination) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		h.badGateway(w, r, err)
 		return
 	}
@@ -387,6 +425,40 @@ func (h *Handler) withAuth(permission string, next http.Handler) http.Handler {
 		}
 		ctx := r.Context()
 		ctx = contextWithUID(ctx, uid)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// withAuthAny 满足任一权限即可（用于规则模板：建规则的人或管机器人的人都能看预设）。
+func (h *Handler) withAuthAny(permissions []string, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		auth := strings.TrimSpace(r.Header.Get("Authorization"))
+		if !strings.HasPrefix(auth, "Bearer ") {
+			http.Error(w, "missing bearer token", http.StatusUnauthorized)
+			return
+		}
+		uid, perms, err := h.authSvc.ParseToken(strings.TrimPrefix(auth, "Bearer "))
+		if err != nil {
+			http.Error(w, "invalid token", http.StatusUnauthorized)
+			return
+		}
+		if perms["system.manage"] {
+			ctx := contextWithUID(r.Context(), uid)
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+		ok := false
+		for _, p := range permissions {
+			if perms[p] {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			http.Error(w, "permission denied", http.StatusForbidden)
+			return
+		}
+		ctx := contextWithUID(r.Context(), uid)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

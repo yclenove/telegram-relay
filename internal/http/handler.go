@@ -21,12 +21,12 @@ import (
 )
 
 type Handler struct {
-	logger   *slog.Logger
-	verifier *security.Verifier
-	relaySvc *relay.Service
+	logger    *slog.Logger
+	verifier  *security.CompositeVerifier
+	relaySvc  *relay.Service
 	notifySvc *service.NotifyService
-	limiter  *rate.Limiter
-	metrics  metrics
+	limiter   *rate.Limiter
+	metrics   metrics
 }
 
 type metrics struct {
@@ -35,7 +35,7 @@ type metrics struct {
 	failed  uint64
 }
 
-func NewHandler(logger *slog.Logger, verifier *security.Verifier, relaySvc *relay.Service, notifySvc *service.NotifyService, limiter *rate.Limiter) *Handler {
+func NewHandler(logger *slog.Logger, verifier *security.CompositeVerifier, relaySvc *relay.Service, notifySvc *service.NotifyService, limiter *rate.Limiter) *Handler {
 	return &Handler{
 		logger:   logger,
 		verifier: verifier,
@@ -87,8 +87,6 @@ func (h *Handler) notify(w http.ResponseWriter, r *http.Request) {
 	}
 
 	requestID := requestIDFromHeaders(r)
-	// 这里沿用 context 传递 request_id，后续如需扩展可改为 typed key。
-	ctx := context.WithValue(r.Context(), "request_id", requestID)
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
@@ -97,23 +95,26 @@ func (h *Handler) notify(w http.ResponseWriter, r *http.Request) {
 	}
 	atomic.AddUint64(&h.metrics.total, 1)
 
-	if err := h.verifier.VerifyRequest(r, body); err != nil {
+	nr, err := h.verifier.VerifyRequest(r, body)
+	if err != nil {
 		h.respondError(w, requestID, http.StatusUnauthorized, "security verification failed", err)
 		return
 	}
+	ctx := context.WithValue(nr.Context(), "request_id", requestID)
+	credID, _ := security.IngestCredentialIDFromContext(nr.Context())
 
 	var req model.NotifyRequest
 	if err := json.Unmarshal(body, &req); err != nil {
 		h.respondError(w, requestID, http.StatusBadRequest, "invalid json payload", err)
 		return
 	}
-	if err := validateNotifyRequest(req); err != nil {
+	if err := validateNotifyRequest(req, credID); err != nil {
 		h.respondError(w, requestID, http.StatusBadRequest, "invalid notify request", err)
 		return
 	}
 
 	if h.notifySvc != nil {
-		if _, err := h.notifySvc.Ingest(ctx, req, body); err != nil {
+		if _, err := h.notifySvc.Ingest(ctx, req, body, credID); err != nil {
 			h.respondError(w, requestID, http.StatusBadGateway, "event ingest failed", err)
 			return
 		}
@@ -146,14 +147,14 @@ func (h *Handler) respondError(w http.ResponseWriter, requestID string, code int
 }
 
 // validateNotifyRequest 校验中转请求的关键业务字段。
-func validateNotifyRequest(req model.NotifyRequest) error {
+func validateNotifyRequest(req model.NotifyRequest, ingestCredentialID *int64) error {
 	if strings.TrimSpace(req.Title) == "" {
 		return errors.New("title is required")
 	}
 	if strings.TrimSpace(req.Message) == "" {
 		return errors.New("message is required")
 	}
-	if strings.TrimSpace(req.Source) == "" {
+	if strings.TrimSpace(req.Source) == "" && ingestCredentialID == nil {
 		return errors.New("source is required")
 	}
 	if strings.TrimSpace(req.EventID) == "" {

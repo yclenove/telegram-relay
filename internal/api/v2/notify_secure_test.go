@@ -25,7 +25,7 @@ type stubIngester struct {
 	err    error
 }
 
-func (s *stubIngester) Ingest(_ context.Context, _ model.NotifyRequest, _ []byte) (int64, error) {
+func (s *stubIngester) Ingest(_ context.Context, _ model.NotifyRequest, _ []byte, _ *int64) (int64, error) {
 	s.called = true
 	return s.id, s.err
 }
@@ -33,12 +33,12 @@ func (s *stubIngester) Ingest(_ context.Context, _ model.NotifyRequest, _ []byte
 func TestNotifyV2_UnauthorizedWithoutToken(t *testing.T) {
 	t.Parallel()
 	stub := &stubIngester{id: 42}
-	v := security.NewVerifier(config.SecurityConfig{
+	v := security.NewCompositeVerifier(config.SecurityConfig{
 		Level:            "basic",
 		Token:            "secret-token",
 		TimestampSkewSec: 300,
-	})
-	h := NewHandler(slog.Default(), nil, nil, stub, v, rate.NewLimiter(100, 100))
+	}, nil)
+	h := NewHandler(slog.Default(), nil, nil, stub, v, rate.NewLimiter(100, 100), IntegrationHints{})
 
 	srv := httptest.NewServer(http.HandlerFunc(h.notifyV2Secure))
 	t.Cleanup(srv.Close)
@@ -59,12 +59,12 @@ func TestNotifyV2_UnauthorizedWithoutToken(t *testing.T) {
 func TestNotifyV2_OKWithBearer(t *testing.T) {
 	t.Parallel()
 	stub := &stubIngester{id: 99}
-	v := security.NewVerifier(config.SecurityConfig{
+	v := security.NewCompositeVerifier(config.SecurityConfig{
 		Level:            "basic",
 		Token:            "secret-token",
 		TimestampSkewSec: 300,
-	})
-	h := NewHandler(slog.Default(), nil, nil, stub, v, rate.NewLimiter(100, 100))
+	}, nil)
+	h := NewHandler(slog.Default(), nil, nil, stub, v, rate.NewLimiter(100, 100), IntegrationHints{})
 
 	body := map[string]string{"title": "t", "source": "s", "message": "m"}
 	raw, err := json.Marshal(body)
@@ -102,7 +102,7 @@ func TestNotifyTest_UnauthorizedWithoutBearer(t *testing.T) {
 	t.Parallel()
 	stub := &stubIngester{id: 1}
 	authSvc := service.NewAuthService(nil, config.AuthConfig{JWTSecret: "unit-secret", AccessTokenTTLMin: 60, RefreshTokenTTLMin: 1440})
-	h := NewHandler(slog.Default(), nil, authSvc, stub, nil, nil)
+	h := NewHandler(slog.Default(), nil, authSvc, stub, nil, nil, IntegrationHints{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v2/notify-test", bytes.NewReader([]byte(`{"title":"a","source":"s","message":"m"}`)))
 	h.withAuth("bot.manage", http.HandlerFunc(h.notifyTest)).ServeHTTP(rec, req)
@@ -118,7 +118,7 @@ func TestNotifyTest_ForbiddenWithoutBotManage(t *testing.T) {
 	t.Parallel()
 	stub := &stubIngester{id: 2}
 	authSvc := service.NewAuthService(nil, config.AuthConfig{JWTSecret: "unit-secret", AccessTokenTTLMin: 60, RefreshTokenTTLMin: 1440})
-	h := NewHandler(slog.Default(), nil, authSvc, stub, nil, nil)
+	h := NewHandler(slog.Default(), nil, authSvc, stub, nil, nil, IntegrationHints{})
 	raw := testAccessJWT(t, "unit-secret", 9, []string{"event.read"})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v2/notify-test", bytes.NewReader([]byte(`{"title":"a","source":"s","message":"m"}`)))
@@ -136,7 +136,7 @@ func TestNotifyTest_OKWithBotManageJWT(t *testing.T) {
 	t.Parallel()
 	stub := &stubIngester{id: 42}
 	authSvc := service.NewAuthService(nil, config.AuthConfig{JWTSecret: "unit-secret", AccessTokenTTLMin: 60, RefreshTokenTTLMin: 1440})
-	h := NewHandler(slog.Default(), nil, authSvc, stub, nil, nil)
+	h := NewHandler(slog.Default(), nil, authSvc, stub, nil, nil, IntegrationHints{})
 	raw := testAccessJWT(t, "unit-secret", 3, []string{"bot.manage"})
 	body := []byte(`{"title":"t","source":"s","message":"m"}`)
 	rec := httptest.NewRecorder()

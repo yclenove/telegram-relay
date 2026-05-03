@@ -1,5 +1,7 @@
 # 宝塔自定义通知接入指南
 
+> 若要把 **relay + PostgreSQL + 管理台** 部署在已安装宝塔的服务器上，请看更完整的 **[宝塔傻瓜部署](./deploy-baota-simple.md)**。本文仅说明「宝塔告警 Webhook 如何调用已运行的 relay」。
+
 ## 1. 基础信息
 
 - 中转地址：`https://relay.yourdomain.com/api/v1/notify`

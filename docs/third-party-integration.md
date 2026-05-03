@@ -14,24 +14,17 @@
 |------|------|
 | HTTP JSON 入队 | `POST /api/v1/notify` 或 `POST /api/v2/notify` |
 | 鉴权 | `Authorization: Bearer <token>`；`security.level` 为 medium/strict 时需 `X-Timestamp` + `X-Signature` |
+| 多接入方入站凭证（可选） | 除全局 `AUTH_TOKEN` 外，可在管理台创建「入站凭证」：Bearer 明文为 **`key_id` + `.` + `secret`**（整串参与 bcrypt 存库）；每条凭证有**独立 HMAC 密钥**；事件会记录 `ingest_credential_id`（便于审计与排障） |
 | 幂等 | v1 必填 `event_id`；v2 可省略，由服务生成 `evt-<纳秒>` |
 | 限流 | 实例级全局限流（与路径无关，v1/v2 共用） |
 
-### 1.2 当前未支持（与「一接入方一密钥」相关）
+### 1.2 全局凭据与「入站凭证」如何并存
 
-**本版本没有在平台内为「每个第三方接入方」单独签发、轮换、吊销独立 Bearer Token 或独立 API Secret 的能力。**
+- **全局**：仍使用配置中的 `security.token`（常为环境变量 `AUTH_TOKEN`）与 medium/strict 下的 `HMAC_SECRET`。适合单团队或网关统一代发。
+- **按接入方（数据库）**：具备 `ingest_credential.manage` 的管理员可在管理台创建/禁用/轮换「入站凭证」。第三方请求头仍为 `Authorization: Bearer <整串>`，其中 `<整串>` 为创建成功时一次性展示的 **`key_id.secret`**（`secret` 为服务端随机段，**不是** key_id 本身）。
+- **校验顺序**：若 Bearer 与全局 token **长度相同**，会先做常量时间比较以匹配全局 token；否则解析首段为 `key_id`、余下为 `secret`，查库校验 **整条** Bearer 的 bcrypt 哈希；medium/strict 下使用该行的 **独立 HMAC 密钥** 验签（与全局 `HMAC_SECRET` 二选一，取决于本次请求走的是哪套凭据）。
 
-运行时仅读取配置中的 **一个** `security.token`（环境变量常为 `AUTH_TOKEN`），以及 medium/strict 下的 **一个** `HMAC_SECRET`。  
-因此：
-
-- 所有调用公开 `/api/v1|v2/notify` 的第三方在机密层面**共享同一套入站凭据**；
-- 区分责任方更多依赖业务字段（如 **`source`**、`labels`）与上游网关日志，而不是凭据隔离。
-
-若业务强需求「A 厂商泄露密钥不影响 B 厂商」，在现有产品上可采用：
-
-1. **前置 API 网关 / BFF**：由你们自研或 WAF 为不同厂商配置不同 Header/路径，网关校验后再以**单一** relay 凭据调用本服务；
-2. **多 relay 实例**：按接入域或安全域拆分部署，每实例一套 `AUTH_TOKEN`（运维与成本更高）；
-3. **后续版本**：在管理台维护「入站凭证」表（名称、哈希、启用状态、可选绑定默认 `source` 前缀等），校验逻辑改为查库——**尚未在主线实现**，有需求可走需求评审与排期。
+轮换后旧 `secret` 与旧 HMAC 立即失效；禁用后该行不再参与鉴权。
 
 ---
 
@@ -53,7 +46,7 @@
 |------|----|----|------|
 | `title` | 必填 | 必填 | 标题 |
 | `message` | 必填 | 必填 | 正文 |
-| `source` | 必填 | 必填 | 来源标识，**强烈建议**与路由规则 `match_source` 一致，便于分发 |
+| `source` | 必填 | 建议填写；使用**数据库入站凭证**鉴权时可省略，relay 会用该凭证在管理台的**名称**，若名称为空则用 `ingest-<key_id>`（与路由 `match_source` 对齐可减少误投） |
 | `level` | 可选 | 可选 | 如 `info` / `warning`，用于规则匹配 |
 | `event_id` | **必填** | 可选 | 幂等键；v2 省略时由服务生成 |
 | `event_time` | 可选 | 可选 | 展示用 |
@@ -76,9 +69,14 @@
 请求头：
 
 ```http
-Authorization: Bearer <与 security.token / AUTH_TOKEN 相同的值>
+Authorization: Bearer <全局 AUTH_TOKEN，或管理台签发的 key_id.secret 整串>
 Content-Type: application/json
 ```
+
+`<...>` 为以下**之一**即可通过 basic 校验：
+
+- 与 `security.token` / `AUTH_TOKEN` **完全相同**的字符串；或  
+- 管理台「入站凭证」创建/轮换时展示的 **`plain_token`**（格式 `key_id` + `.` + `secret`）。
 
 ### 4.2 medium / strict
 
@@ -89,8 +87,10 @@ Content-Type: application/json
 
 ```text
 payload = "<timestamp>." + <原始请求体字节转 UTF-8 字符串，与 body 完全一致>
-X-Signature = hex( HMAC_SHA256( HMAC_SECRET, payload ) )
+X-Signature = hex( HMAC_SHA256( <密钥>, payload ) )
 ```
+
+其中 **`<密钥>`**：使用全局 `AUTH_TOKEN` 入站时为配置项 `HMAC_SECRET`；使用某条「入站凭证」入站时为该凭证一次性下发的 **`plain_hmac_secret`**（与 `HMAC_SECRET` 彼此独立）。
 
 **strict** 另校验客户端 IP 是否在 `ip_whitelist`；经反向代理时注意 `RemoteAddr` 可能是反代 IP，详见 [使用手册](./user-manual.md) 中 HTTPS / 反代章节。
 
@@ -133,7 +133,38 @@ with urllib.request.urlopen(req, timeout=10) as resp:
     print(resp.read().decode())
 ```
 
-### 5.3 Python 3（medium：带签名）
+### 5.3 PHP（basic，需 `allow_url_fopen`）
+
+```php
+<?php
+$url = 'https://relay.example.com/api/v2/notify';
+$token = 'YOUR_AUTH_TOKEN';
+$body = json_encode([
+    'title' => '心跳',
+    'message' => 'ok',
+    'source' => 'cron-health',
+    'level' => 'info',
+], JSON_UNESCAPED_UNICODE);
+$opts = [
+    'http' => [
+        'method' => 'POST',
+        'header' => "Authorization: Bearer {$token}\r\nContent-Type: application/json\r\n",
+        'content' => $body,
+        'timeout' => 10,
+    ],
+];
+$ctx = stream_context_create($opts);
+$res = file_get_contents($url, false, $ctx);
+if ($res === false) {
+    fwrite(STDERR, "request failed\n");
+    exit(1);
+}
+echo $res;
+```
+
+使用「入站凭证」且希望由服务端填默认 `source` 时，可从上述 JSON 中去掉 `source` 键（名称非空则用名称，否则 `ingest-<key_id>`）。
+
+### 5.4 Python 3（medium：带签名）
 
 ```python
 import hashlib
@@ -166,7 +197,7 @@ with urllib.request.urlopen(req, timeout=10) as resp:
     print(resp.read().decode())
 ```
 
-**注意**：参与签名的 `raw_body` 必须与 HTTP 请求体**逐字节一致**（含空格、字段顺序），否则签名校验失败。
+**注意**：参与签名的 `raw_body` 必须与 HTTP 请求体**逐字节一致**（含空格、字段顺序），否则签名校验失败。若 JSON 省略 `source` 且使用入站凭证，验签仍针对**客户端发出的原始字节**；relay 在验签通过之后才会为路由解析补齐 `source` 并入库（可能与发送体字段集合不一致，属预期行为）。
 
 ---
 
@@ -174,6 +205,7 @@ with urllib.request.urlopen(req, timeout=10) as resp:
 
 1. 事件入队后写入数据库，由 **路由规则** 决定发往哪个 **发送目标（Destination）**。
 2. 请与平台管理员约定：`source` / `level` / `labels` 与规则的匹配关系，避免「入队成功但无规则命中」导致不投递或落入默认策略（若有）。
+3. 若使用数据库「入站凭证」，事件行会带上 **`ingest_credential_id`**（全局 `AUTH_TOKEN` 入站时该字段为空），便于在事件列表或审计中区分接入方。
 
 ---
 
@@ -181,7 +213,7 @@ with urllib.request.urlopen(req, timeout=10) as resp:
 
 | HTTP | 常见原因 |
 |------|----------|
-| 400 | JSON 非法、缺必填字段（如 v1 缺 `event_id`） |
+| 400 | JSON 非法、缺必填字段（如 v1 缺 `event_id`；全局 Token 入站时缺 `source`） |
 | 401 | Bearer 错误、签名/时间窗错误、strict 下 IP 不在白名单 |
 | 429 | 触发全局限流 |
 | 502 | 入队写库失败等（查 relay 日志与数据库） |
